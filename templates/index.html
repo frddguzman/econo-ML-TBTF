@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interbank ABM Simulator</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 320px;
+    min-width: 320px;
+    background: #fff;
+    border-right: 1px solid #ddd;
+    overflow-y: auto;
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sidebar h1 {
+    font-size: 17px;
+    margin-bottom: 8px;
+    color: #1a1a2e;
+  }
+  .sidebar h1 small {
+    display: block;
+    font-weight: 400;
+    font-size: 11px;
+    color: #888;
+    margin-top: 2px;
+  }
+
+  details {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 0;
+    overflow: hidden;
+  }
+  details[open] { padding-bottom: 8px; }
+  summary {
+    padding: 8px 12px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    background: #f8f9fa;
+    user-select: none;
+  }
+  summary:hover { background: #eef1f5; }
+
+  .param-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 12px;
+    gap: 6px;
+  }
+  .param-row label {
+    flex: 1;
+    font-size: 12px;
+    color: #555;
+  }
+  .param-row label .sym {
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-right: 2px;
+  }
+  .param-row input, .param-row select {
+    width: 90px;
+    padding: 4px 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 12px;
+    text-align: right;
+  }
+  .param-row select { text-align: left; width: 140px; }
+
+  #btn-run {
+    margin-top: 10px;
+    padding: 10px;
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #btn-run:hover { background: #1d4ed8; }
+  #btn-run:disabled { background: #93b4f5; cursor: wait; }
+
+  #status {
+    font-size: 11px;
+    color: #888;
+    text-align: center;
+    margin-top: 4px;
+    min-height: 16px;
+  }
+  #status.error { color: #dc2626; }
+
+  /* ── Main area ── */
+  .main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+
+  /* Network graph */
+  .network-section {
+    background: #fff;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .network-section h2 {
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 8px;
+  }
+  #network-img {
+    max-width: 100%;
+    max-height: 420px;
+    border-radius: 4px;
+  }
+  .network-placeholder {
+    color: #aaa;
+    font-size: 13px;
+    padding: 60px 0;
+  }
+
+  /* Chart grid */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 12px;
+  }
+  .chart-card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .chart-card .plot { width: 100%; height: 260px; }
+</style>
+</head>
+<body>
+
+<!-- ════════ SIDEBAR ════════ -->
+<div class="sidebar">
+  <h1>
+    Interbank ABM
+    <small>Endogenous Reputation &amp; Exposure-Driven Network</small>
+  </h1>
+
+  <details open>
+    <summary>Simulation</summary>
+    <div class="param-row">
+      <label><span class="sym">N</span> Banks</label>
+      <input id="p-N" type="number" value="5" min="2" max="200" step="1">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">T</span> Periods</label>
+      <input id="p-T" type="number" value="10" min="1" max="5000" step="1">
+    </div>
+    <div class="param-row">
+      <label>Seed</label>
+      <input id="p-seed" type="number" value="26462" min="0" step="1">
+    </div>
+    <div class="param-row">
+      <label>Lender mechanism</label>
+      <select id="p-algorithm">
+        <option value="Boltzmann" selected>Boltzmann</option>
+        <option value="InitialStability">InitialStability</option>
+        <option value="Preferential">Preferential</option>
+        <option value="RestrictedMarket">RestrictedMarket</option>
+        <option value="ShockedMarket">ShockedMarket</option>
+        <option value="ShockedMarket2">ShockedMarket2</option>
+        <option value="ShockedMarket3">ShockedMarket3</option>
+        <option value="SmallWorld">SmallWorld</option>
+      </select>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Screening Costs (eqs. 3-5)</summary>
+    <div class="param-row">
+      <label><span class="sym">&sigma;<sub>min</sub></span> Lender cost</label>
+      <input id="p-sigma_min" type="number" value="0.025" min="0" step="0.001">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&delta;<sub>min</sub></span> Borrower transparency</label>
+      <input id="p-delta_min" type="number" value="0.015" min="0" step="0.001">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&gamma;</span> Maturity rate</label>
+      <input id="p-gamma_screening" type="number" value="0.01" min="0" step="0.001">
+    </div>
+  </details>
+
+  <details open>
+    <summary>Recovery &amp; Switching</summary>
+    <div class="param-row">
+      <label><span class="sym">&alpha;</span> Recovery rate (eq. 8)</label>
+      <input id="p-alpha_recovery" type="number" value="0.3" min="0" max="1" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&beta;</span> Boltzmann intensity (eq. 13)</label>
+      <input id="p-beta" type="number" value="5" min="0" step="0.1">
+    </div>
+  </details>
+
+  <details open>
+    <summary>Shocks &amp; Costs</summary>
+    <div class="param-row">
+      <label><span class="sym">&mu;</span> Shock mean</label>
+      <input id="p-mu" type="number" value="0.7" min="0" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&omega;</span> Shock dispersion</label>
+      <input id="p-omega" type="number" value="0.6" min="0" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&rho;</span> Fire sale cost</label>
+      <input id="p-rho" type="number" value="0.3" min="0" max="1" step="0.01">
+    </div>
+  </details>
+
+  <button id="btn-run" onclick="runSimulation()">Run Simulation</button>
+  <div id="status"></div>
+</div>
+
+<!-- ════════ MAIN AREA ════════ -->
+<div class="main">
+  <div class="network-section" id="network-section">
+    <h2>Bank Network</h2>
+    <div class="network-placeholder" id="network-placeholder">
+      Run a simulation to see the network topology
+    </div>
+    <img id="network-img" style="display:none" alt="Bank network graph">
+  </div>
+
+  <div class="chart-grid" id="chart-grid">
+    <!-- Charts are created dynamically -->
+  </div>
+</div>
+
+<script>
+const STATS = [
+  { key: 'interest_rate',   title: 'Interest Rate (eq. 9)' },
+  { key: 'equity',          title: 'Total Equity' },
+  { key: 'bankruptcy',      title: 'Bankruptcies' },
+  { key: 'fitness',         title: 'Fitness \u03C6 (eq. 11)' },
+  { key: 'liquidity',       title: 'Liquidity' },
+  { key: 'loans',           title: 'Loans (eq. 10)' },
+  { key: 'deposits',        title: 'Deposits' },
+  { key: 'leverage',        title: 'Leverage' },
+  { key: 'rationing',       title: 'Rationing' },
+  { key: 'profits',         title: 'Profits (eq. 8)' },
+  { key: 'prob_bankruptcy',  title: 'P(Bankruptcy) (eq. 2)' },
+];
+
+// Build chart containers on load
+const grid = document.getElementById('chart-grid');
+for (const s of STATS) {
+  const card = document.createElement('div');
+  card.className = 'chart-card';
+  card.innerHTML = `<div class="plot" id="chart-${s.key}"></div>`;
+  grid.appendChild(card);
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+async function runSimulation() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  setStatus('Simulation in progress...', false);
+
+  const params = {
+    N:                parseFloat(document.getElementById('p-N').value),
+    T:                parseFloat(document.getElementById('p-T').value),
+    seed:             parseFloat(document.getElementById('p-seed').value),
+    algorithm:        document.getElementById('p-algorithm').value,
+    sigma_min:        parseFloat(document.getElementById('p-sigma_min').value),
+    delta_min:        parseFloat(document.getElementById('p-delta_min').value),
+    gamma_screening:  parseFloat(document.getElementById('p-gamma_screening').value),
+    alpha_recovery:   parseFloat(document.getElementById('p-alpha_recovery').value),
+    beta:             parseFloat(document.getElementById('p-beta').value),
+    mu:               parseFloat(document.getElementById('p-mu').value),
+    omega:            parseFloat(document.getElementById('p-omega').value),
+    rho:              parseFloat(document.getElementById('p-rho').value),
+  };
+
+  try {
+    const resp = await fetch('/api/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      setStatus('Error: ' + data.error, true);
+      btn.disabled = false;
+      btn.textContent = 'Run Simulation';
+      return;
+    }
+
+    // ── Network graph ──
+    if (data.network) {
+      const img = document.getElementById('network-img');
+      img.src = 'data:image/png;base64,' + data.network;
+      img.style.display = 'block';
+      document.getElementById('network-placeholder').style.display = 'none';
+    }
+
+    // ── Time-series charts ──
+    const plotColors = [
+      '#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed',
+      '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#be123c',
+    ];
+
+    for (let i = 0; i < STATS.length; i++) {
+      const s = STATS[i];
+      const y = data[s.key];
+      if (!y) continue;
+      Plotly.newPlot('chart-' + s.key, [{
+        x: data.time,
+        y: y,
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: plotColors[i % plotColors.length], width: 2 },
+        hovertemplate: 't=%{x}<br>' + s.key + '=%{y:.4f}<extra></extra>',
+      }], {
+        title: { text: s.title, font: { size: 13 } },
+        xaxis: { title: 't', gridcolor: '#eee' },
+        yaxis: { gridcolor: '#eee' },
+        margin: { t: 36, r: 16, b: 36, l: 52 },
+        paper_bgcolor: '#fff',
+        plot_bgcolor: '#fff',
+        hovermode: 'x unified',
+      }, {
+        responsive: true,
+        displayModeBar: false,
+      });
+    }
+
+    const T = data.time.length;
+    setStatus(`Done — ${T} periods simulated`, false);
+
+  } catch (err) {
+    setStatus('Request failed: ' + err.message, true);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Simulation';
+}
+</script>
+</body>
+</html>

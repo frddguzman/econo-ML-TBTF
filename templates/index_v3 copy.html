@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interbank ABM Simulator v3</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 320px;
+    min-width: 320px;
+    background: #fff;
+    border-right: 1px solid #ddd;
+    overflow-y: auto;
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sidebar h1 { font-size: 17px; margin-bottom: 4px; color: #1a1a2e; }
+  .sidebar h1 small {
+    display: block; font-weight: 400; font-size: 11px; color: #888; margin-top: 2px;
+  }
+  details {
+    border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
+  }
+  details[open] { padding-bottom: 8px; }
+  summary {
+    padding: 8px 12px; font-weight: 600; font-size: 13px;
+    cursor: pointer; background: #f8f9fa; user-select: none;
+  }
+  summary:hover { background: #eef1f5; }
+  .param-row {
+    display: flex; align-items: center; padding: 4px 12px; gap: 6px;
+  }
+  .param-row label { flex: 1; font-size: 12px; color: #555; }
+  .param-row label .sym { font-weight: 600; color: #1a1a2e; margin-right: 2px; }
+  .param-row input, .param-row select {
+    width: 90px; padding: 4px 6px; border: 1px solid #ccc;
+    border-radius: 4px; font-size: 12px; text-align: right;
+  }
+  .param-row select { text-align: left; width: 140px; }
+  #btn-run {
+    margin-top: 10px; padding: 10px; background: #2563eb; color: #fff;
+    border: none; border-radius: 6px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  #btn-run:hover { background: #1d4ed8; }
+  #btn-run:disabled { background: #93b4f5; cursor: wait; }
+  #status { font-size: 11px; color: #888; text-align: center; margin-top: 4px; min-height: 16px; }
+  #status.error { color: #dc2626; }
+
+  /* ── Main area ── */
+  .main { flex: 1; overflow-y: auto; padding: 20px; }
+
+  /* Network */
+  .network-section {
+    background: #fff; border-radius: 8px; padding: 12px;
+    margin-bottom: 20px; text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .network-section h2 { font-size: 14px; color: #555; margin-bottom: 8px; }
+  #network-img { max-width: 100%; max-height: 420px; border-radius: 4px; }
+  .network-placeholder { color: #aaa; font-size: 13px; padding: 60px 0; }
+
+  /* Panels */
+  .panel {
+    background: #fff; border-radius: 8px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .panel h2 {
+    font-size: 15px; color: #1a1a2e; margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 2px solid #e0e0e0;
+  }
+  .panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 12px;
+  }
+  .chart-slot { min-height: 280px; }
+
+  /* Scatter controls */
+  .scatter-controls {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .scatter-controls label { font-size: 12px; color: #555; font-weight: 600; }
+  .scatter-controls select {
+    padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 12px;
+  }
+  .scatter-controls input[type="range"] {
+    width: 200px; cursor: pointer;
+  }
+  .scatter-controls .period-label {
+    font-size: 13px; font-weight: 600; color: #2563eb; min-width: 60px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════ SIDEBAR ════════ -->
+<div class="sidebar">
+  <h1>
+    Interbank ABM <span style="font-size:11px;color:#2563eb">v3</span>
+    <small>Endogenous Reputation &amp; Exposure-Driven Network</small>
+  </h1>
+
+  <details open>
+    <summary>Simulation</summary>
+    <div class="param-row">
+      <label><span class="sym">N</span> Banks</label>
+      <input id="p-N" type="number" value="5" min="2" max="200" step="1">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">T</span> Periods</label>
+      <input id="p-T" type="number" value="10" min="1" max="5000" step="1">
+    </div>
+    <div class="param-row">
+      <label>Seed</label>
+      <input id="p-seed" type="number" value="26462" min="0" step="1">
+    </div>
+    <div class="param-row">
+      <label>Lender mechanism</label>
+      <select id="p-algorithm">
+        <option value="Boltzmann" selected>Boltzmann</option>
+        <option value="InitialStability">InitialStability</option>
+        <option value="Preferential">Preferential</option>
+        <option value="RestrictedMarket">RestrictedMarket</option>
+        <option value="ShockedMarket">ShockedMarket</option>
+        <option value="ShockedMarket2">ShockedMarket2</option>
+        <option value="ShockedMarket3">ShockedMarket3</option>
+        <option value="SmallWorld">SmallWorld</option>
+      </select>
+    </div>
+    <div class="param-row" id="row-lc_p">
+      <label><span class="sym">p</span> Attachment prob.</label>
+      <input id="p-lc_p" type="number" value="0.5" min="0" max="1" step="0.05">
+    </div>
+    <div class="param-row" id="row-lc_m">
+      <label><span class="sym">m</span> Graph degree</label>
+      <input id="p-lc_m" type="number" value="1" min="1" step="1">
+    </div>
+  </details>
+
+  <details open>
+    <summary>Screening Costs (eqs. 3-5)</summary>
+    <div class="param-row">
+      <label><span class="sym">&sigma;<sub>min</sub></span> Lender cost</label>
+      <input id="p-sigma_min" type="number" value="0.025" min="0" step="0.001">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&delta;<sub>min</sub></span> Borrower transparency</label>
+      <input id="p-delta_min" type="number" value="0.015" min="0" step="0.001">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&gamma;</span> Maturity rate</label>
+      <input id="p-gamma_screening" type="number" value="0.01" min="0" step="0.001">
+    </div>
+  </details>
+
+  <details open>
+    <summary>Recovery &amp; Switching</summary>
+    <div class="param-row">
+      <label><span class="sym">&alpha;</span> Recovery rate (eq. 8)</label>
+      <input id="p-alpha_recovery" type="number" value="0.3" min="0" max="1" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&beta;</span> Boltzmann intensity (eq. 13)</label>
+      <input id="p-beta" type="number" value="5" min="0" step="0.1">
+    </div>
+  </details>
+
+  <details open>
+    <summary>Shocks &amp; Costs</summary>
+    <div class="param-row">
+      <label><span class="sym">&mu;</span> Shock mean</label>
+      <input id="p-mu" type="number" value="0.7" min="0" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&omega;</span> Shock dispersion</label>
+      <input id="p-omega" type="number" value="0.6" min="0" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&rho;</span> Fire sale cost</label>
+      <input id="p-rho" type="number" value="0.3" min="0" max="1" step="0.01">
+    </div>
+  </details>
+
+  <button id="btn-run" onclick="runSimulation()">Run Simulation</button>
+  <div id="status"></div>
+</div>
+
+<!-- ════════ MAIN AREA ════════ -->
+<div class="main">
+  <!-- Network -->
+  <div class="network-section">
+    <h2>Bank Network</h2>
+    <div class="network-placeholder" id="network-placeholder">Run a simulation to see results</div>
+    <img id="network-img" style="display:none" alt="Bank network graph">
+  </div>
+
+  <!-- Panel 0: Age-Rate Scatter (new in v3) -->
+  <div class="panel" id="panel-scatter" style="display:none">
+    <h2>Age-Rate Trade-off (eq. 11)</h2>
+    <div class="scatter-controls">
+      <label>Period:</label>
+      <input type="range" id="scatter-slider" min="0" max="0" value="0">
+      <span class="period-label" id="scatter-period-label">t = 0</span>
+    </div>
+    <div class="chart-slot" id="chart-scatter" style="min-height: 380px;"></div>
+  </div>
+
+  <!-- Panel 1: Balance Sheet -->
+  <div class="panel" id="panel-balance" style="display:none">
+    <h2>Balance Sheet</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-composition"></div>
+      <div class="chart-slot" id="chart-liquidity-loans"></div>
+    </div>
+  </div>
+
+  <!-- Panel 2: Market Activity -->
+  <div class="panel" id="panel-market" style="display:none">
+    <h2>Market Activity</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-interest-rate"></div>
+      <div class="chart-slot" id="chart-profits-debt"></div>
+      <div class="chart-slot" id="chart-rationing"></div>
+    </div>
+  </div>
+
+  <!-- Panel 3: Risk & Stability -->
+  <div class="panel" id="panel-risk" style="display:none">
+    <h2>Risk &amp; Stability</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-prob-default"></div>
+      <div class="chart-slot" id="chart-bankruptcies"></div>
+      <div class="chart-slot" id="chart-leverage"></div>
+    </div>
+  </div>
+
+  <!-- Panel 4: Network & Fitness -->
+  <div class="panel" id="panel-network" style="display:none">
+    <h2>Network &amp; Fitness</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-fitness"></div>
+      <div class="chart-slot" id="chart-participants"></div>
+      <div class="chart-slot" id="chart-switching" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const C = {
+  blue:    '#2563eb',
+  red:     '#dc2626',
+  green:   '#059669',
+  orange:  '#d97706',
+  purple:  '#7c3aed',
+  pink:    '#db2777',
+  teal:    '#0891b2',
+  lime:    '#65a30d',
+  slate:   '#64748b',
+};
+
+const BASE_LAYOUT = {
+  margin: { t: 36, r: 16, b: 40, l: 56 },
+  paper_bgcolor: '#fff',
+  plot_bgcolor: '#fafafa',
+  hovermode: 'x unified',
+  xaxis: { title: '', gridcolor: '#eee' },
+  yaxis: { gridcolor: '#eee' },
+  legend: { orientation: 'h', y: -0.2, x: 0.5, xanchor: 'center', font: { size: 10 } },
+};
+const PLOT_CFG = { responsive: true, displayModeBar: false };
+
+function mkLayout(title, extra) {
+  return Object.assign({}, BASE_LAYOUT, { title: { text: title, font: { size: 13 } } }, extra || {});
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+function showPanels() {
+  ['panel-scatter','panel-balance','panel-market','panel-risk','panel-network'].forEach(
+    id => document.getElementById(id).style.display = 'block'
+  );
+}
+
+// ── Scatter plot state ──
+let scatterSnapshots = [];
+
+function renderScatter(idx) {
+  if (!scatterSnapshots.length) return;
+  idx = Math.max(0, Math.min(idx, scatterSnapshots.length - 1));
+  const snap = scatterSnapshots[idx];
+  const banks = snap.banks;
+
+  document.getElementById('scatter-period-label').textContent = 't = ' + snap.period;
+
+  if (banks.length === 0) {
+    Plotly.newPlot('chart-scatter', [], mkLayout('No active banks at t=' + snap.period, {
+      hovermode: 'closest',
+    }), PLOT_CFG);
+    return;
+  }
+
+  // Point size: omega mapped to 8-40px
+  const omegas = banks.map(b => b.omega);
+  const sizes = omegas.map(w => 8 + w * 32);
+
+  // Color: number of borrowers
+  const borrowerCounts = banks.map(b => b.n_borrowers);
+  const maxBorrowers = Math.max(1, ...borrowerCounts);
+
+  const trace = {
+    x: banks.map(b => b.reputation),
+    y: banks.map(b => b.price),
+    mode: 'markers',
+    type: 'scatter',
+    marker: {
+      size: sizes,
+      color: borrowerCounts,
+      colorscale: [
+        [0, '#3498db'],      // 0 borrowers: blue
+        [0.5, '#e67e22'],    // mid: orange
+        [1, '#e74c3c'],      // max: red
+      ],
+      colorbar: {
+        title: { text: 'Borrowers', font: { size: 11 } },
+        thickness: 12,
+        len: 0.6,
+      },
+      cmin: 0,
+      cmax: maxBorrowers,
+      line: { color: '#fff', width: 1 },
+      opacity: 0.85,
+    },
+    text: banks.map(b =>
+      `Bank ${b.id}<br>Age: ${b.age} (T/T<sub>max</sub>=${b.reputation.toFixed(3)})<br>` +
+      `r = ${b.r.toFixed(4)} (r<sub>min</sub>/r = ${b.price.toFixed(3)})<br>` +
+      `Avg \u03C9 = ${b.omega.toFixed(3)}<br>` +
+      `Borrowers: ${b.n_borrowers}`
+    ),
+    hovertemplate: '%{text}<extra></extra>',
+  };
+
+  const layout = {
+    title: { text: `Age-Rate Trade-off \u2014 t = ${snap.period}`, font: { size: 13 } },
+    margin: { t: 44, r: 80, b: 52, l: 56 },
+    paper_bgcolor: '#fff',
+    plot_bgcolor: '#fafafa',
+    hovermode: 'closest',
+    xaxis: {
+      title: { text: 'Reputation (T\u1d62 / T\u2098\u2090\u2093)', font: { size: 12 } },
+      range: [-0.05, 1.05],
+      gridcolor: '#eee',
+    },
+    yaxis: {
+      title: { text: 'Price (r\u2098\u1d62\u2099 / r\u1d62)', font: { size: 12 } },
+      range: [-0.05, 1.05],
+      gridcolor: '#eee',
+    },
+    annotations: [
+      {
+        x: 0.02, y: 0.98, xref: 'paper', yref: 'paper',
+        text: 'Size = avg \u03C9 (exposure weight)',
+        showarrow: false, font: { size: 10, color: '#888' },
+        xanchor: 'left', yanchor: 'top',
+      }
+    ],
+  };
+
+  Plotly.newPlot('chart-scatter', [trace], layout, PLOT_CFG);
+}
+
+function renderCharts(data) {
+  const t = data.time;
+
+  // ── Scatter snapshots ──
+  scatterSnapshots = data.snapshots || [];
+  if (scatterSnapshots.length > 0) {
+    const slider = document.getElementById('scatter-slider');
+    slider.max = scatterSnapshots.length - 1;
+    slider.value = scatterSnapshots.length - 1; // default to last snapshot
+    renderScatter(scatterSnapshots.length - 1);
+  }
+
+  // ── Panel 1: Balance Sheet ──
+
+  // Stacked area: Equity / Deposits / Reserves
+  Plotly.newPlot('chart-composition', [
+    { x: t, y: data.equity,    name: 'Equity (E)',   stackgroup: 'bs', line: { color: C.blue } },
+    { x: t, y: data.deposits,  name: 'Deposits (D)', stackgroup: 'bs', line: { color: C.teal } },
+    { x: t, y: data.reserves,  name: 'Reserves (R)', stackgroup: 'bs', line: { color: C.slate } },
+  ], mkLayout('System Balance Sheet (stacked)', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Overlaid area: Liquidity vs Loans
+  Plotly.newPlot('chart-liquidity-loans', [
+    { x: t, y: data.liquidity, name: 'Liquidity (C)', fill: 'tozeroy',
+      line: { color: C.purple }, fillcolor: 'rgba(124,58,237,0.15)' },
+    { x: t, y: data.loans, name: 'Loans (L)', fill: 'tozeroy',
+      line: { color: C.orange }, fillcolor: 'rgba(217,119,6,0.15)' },
+  ], mkLayout('Liquidity vs Loans', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 2: Market Activity ──
+
+  // Interest rate line
+  Plotly.newPlot('chart-interest-rate', [
+    { x: t, y: data.interest_rate, name: 'Avg r',
+      line: { color: C.blue, width: 2 },
+      hovertemplate: 't=%{x}<br>r = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Average Interest Rate r (eq. 9)', {
+    yaxis: { title: 'Interest Rate', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Profits vs Bad Debt
+  Plotly.newPlot('chart-profits-debt', [
+    { x: t, y: data.profits, name: 'Profits',  line: { color: C.green, width: 2 } },
+    { x: t, y: data.B,       name: 'Bad Debt',  line: { color: C.red, width: 2 } },
+  ], mkLayout('Profits vs Bad Debt (eq. 8)', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Rationing bar
+  Plotly.newPlot('chart-rationing', [
+    { x: t, y: data.rationing, name: 'Rationing', type: 'bar',
+      marker: { color: C.orange, opacity: 0.75 } },
+  ], mkLayout('Credit Rationing per Period', {
+    yaxis: { title: 'Amount Rationed', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 3: Risk & Stability ──
+
+  // Default probability [0,1]
+  Plotly.newPlot('chart-prob-default', [
+    { x: t, y: data.prob_bankruptcy, name: 'Avg p_j',
+      line: { color: C.red, width: 2 },
+      hovertemplate: 't=%{x}<br>p = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Avg Default Probability p\u2C7C (eq. 2)', {
+    yaxis: { title: 'Probability', range: [0, 1], gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Bankruptcies: bar per period + cumulative line on secondary y
+  Plotly.newPlot('chart-bankruptcies', [
+    { x: t, y: data.bankruptcy, name: 'Per Period', type: 'bar',
+      marker: { color: C.red, opacity: 0.6 }, yaxis: 'y' },
+    { x: t, y: data.bankruptcy_cumulative, name: 'Cumulative', type: 'scatter',
+      mode: 'lines', line: { color: C.blue, width: 2.5 }, yaxis: 'y2' },
+  ], mkLayout('Bankruptcies', {
+    yaxis:  { title: '', gridcolor: '#eee', side: 'left' },
+    yaxis2: { title: '', overlaying: 'y', side: 'right', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Leverage
+  Plotly.newPlot('chart-leverage', [
+    { x: t, y: data.leverage, name: 'Avg Leverage',
+      line: { color: C.purple, width: 2 } },
+  ], mkLayout('Average Leverage Ratio', {
+    yaxis: { title: 'Leverage (\u03BB)', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 4: Network & Fitness ──
+
+  // Fitness
+  Plotly.newPlot('chart-fitness', [
+    { x: t, y: data.fitness, name: 'Avg \u03C6',
+      line: { color: C.green, width: 2 },
+      hovertemplate: 't=%{x}<br>\u03C6 = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Average Fitness \u03C6 (eq. 11)', {
+    yaxis: { title: 'Fitness', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Active participants multi-line
+  Plotly.newPlot('chart-participants', [
+    { x: t, y: data.num_banks,        name: 'Total Banks',      line: { color: C.slate, width: 2 } },
+    { x: t, y: data.active_lenders,   name: 'Active Lenders',   line: { color: C.blue, width: 2 } },
+    { x: t, y: data.active_borrowers, name: 'Active Borrowers', line: { color: C.orange, width: 2 } },
+  ], mkLayout('Market Participants', {
+    yaxis: { title: 'Count', gridcolor: '#eee', dtick: 1 },
+  }), PLOT_CFG);
+
+  // Boltzmann switching probability (conditional)
+  const switchDiv = document.getElementById('chart-switching');
+  if (data.has_boltzmann && data.P) {
+    switchDiv.style.display = 'block';
+    Plotly.newPlot('chart-switching', [
+      // Band: P_min to P_max
+      { x: t, y: data.P_max, name: 'P max', line: { width: 0 }, showlegend: false },
+      { x: t, y: data.P_min, name: 'P range', fill: 'tonexty',
+        fillcolor: 'rgba(37,99,235,0.12)', line: { width: 0 } },
+      // Main line
+      { x: t, y: data.P, name: 'Avg P',
+        line: { color: C.blue, width: 2 },
+        hovertemplate: 't=%{x}<br>P = %{y:.4f}<extra></extra>' },
+    ], mkLayout('Boltzmann Switching Probability P (eq. 13)', {
+      yaxis: { title: 'Probability', range: [0, 1], gridcolor: '#eee' },
+    }), PLOT_CFG);
+  } else {
+    switchDiv.style.display = 'none';
+  }
+}
+
+// Slider event
+document.getElementById('scatter-slider').addEventListener('input', function() {
+  renderScatter(parseInt(this.value));
+});
+
+async function runSimulation() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  btn.textContent = 'Running\u2026';
+  setStatus('Simulation in progress\u2026', false);
+
+  const params = {
+    N:                parseFloat(document.getElementById('p-N').value),
+    T:                parseFloat(document.getElementById('p-T').value),
+    seed:             parseFloat(document.getElementById('p-seed').value),
+    algorithm:        document.getElementById('p-algorithm').value,
+    lc_p:             parseFloat(document.getElementById('p-lc_p').value),
+    lc_m:             parseInt(document.getElementById('p-lc_m').value),
+    sigma_min:        parseFloat(document.getElementById('p-sigma_min').value),
+    delta_min:        parseFloat(document.getElementById('p-delta_min').value),
+    gamma_screening:  parseFloat(document.getElementById('p-gamma_screening').value),
+    alpha_recovery:   parseFloat(document.getElementById('p-alpha_recovery').value),
+    beta:             parseFloat(document.getElementById('p-beta').value),
+    mu:               parseFloat(document.getElementById('p-mu').value),
+    omega:            parseFloat(document.getElementById('p-omega').value),
+    rho:              parseFloat(document.getElementById('p-rho').value),
+  };
+
+  try {
+    const resp = await fetch('/api/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      setStatus('Error: ' + data.error, true);
+      btn.disabled = false;
+      btn.textContent = 'Run Simulation';
+      return;
+    }
+
+    // Network graph
+    if (data.network) {
+      const img = document.getElementById('network-img');
+      img.src = 'data:image/png;base64,' + data.network;
+      img.style.display = 'block';
+      document.getElementById('network-placeholder').style.display = 'none';
+    }
+
+    showPanels();
+    renderCharts(data);
+
+    setStatus(`Done \u2014 ${data.time.length} periods simulated`, false);
+
+  } catch (err) {
+    setStatus('Request failed: ' + err.message, true);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Simulation';
+}
+</script>
+</body>
+</html>
