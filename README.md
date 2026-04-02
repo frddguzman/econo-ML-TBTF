@@ -1,320 +1,188 @@
-# Auxiliary files
+# Too-Big-To-Fail Extension of econo-ml
 
-- `requirements.txt`: list of the necessary python packages
+A **TBTF (Too-Big-To-Fail)** extension of the [`hcastillo/econo-ml`](https://github.com/hcastillo/econo-ml) agent-based interbank network model. 
 
-# Interbank model
 
-- `interbank.py`: use to execute standalone the Interbank simulation.
+**Base models:**
+- Lenzu & Tedeschi (2012) -- *Systemic risk on different interbank network topologies* (Physica A)
+- Berardi & Tedeschi (2017) -- *From banks' strategies to financial (in)stability* (IREF)
 
-  - It accepts command line options. For instance:
+---
 
-    ``` {.bash language="bash" basicstyle="\\ttfamily\\small"}
-    interbank.py --log DEBUG --n 150 --t 2000
-    interbank.py --save results.gdt --p 0.5 eta=0.35 param=X
-    ```
+## What This Extension Does
 
-  - When it is used as a package, the sequence should be:
+Bailout expectations distort bank behavior **ex-ante**, creating systemic fragility **endogenously**. When lenders expect that large borrowers will be bailed out, they extend more credit to those borrowers, causing them to absorb disproportionate system liquidity, crowd out smaller borrowers, and create a policy dilemma: the **TBTF trap**.
 
-    ``` {.python language="Python" basicstyle="\\ttfamily\\small"}
-    import interbank
-    model = interbank.Model()
-    model.config.configure(param=x)
-    model.forward()
-    eta = model.get_current_fitness()
-    model.set_policy_recommendation(eta=0.5)
-    ```
+### The Two Horns of the Trap
 
-- Basic options:
+- **Horn 1 (no bailout, eta=0):** When the large borrower fails, its lenders absorb massive bad debt. Depositor-priority resolution means lenders recover almost nothing.
+- **Horn 2 (bailout, eta>0):** The inflated loan function funnels liquidity toward the TBTF borrower, starving smaller borrowers. The fiscal cost of bailouts further erodes the system.
 
-  ``` {.bash language="bash" basicstyle="\\ttfamily\\small"}
-  # To list all options:
-          interbank.py --help
+### The Policy Prediction
 
-          # Using lender's change mechanism ShockedMarket3
-          # with probability of attachment 0.3:
-          interbank.py --lc ShockedMarket3 --p 0.3
+There exists an **interior optimum eta\*** where some bailout mitigates catastrophic failure costs, but too much bailout creates an unsustainable liquidity funnel. Confirmed by Monte Carlo (20 seeds): **eta\* ~ 0.1**, optimal band **[0.1, 0.3]**.
 
-          # Same for Preferential with m nodes:
-          interbank.py --lc Preferential --m 0.3
+---
 
-          # To use a fastest algorithm to run in big simulations:
-          interbank.py --fast
+## Key Equations
 
-          # To run a simulation based on exp_runner:
-          python -m experiments.exp_shockedmarket --do
-  ```
+The TBTF extension adds four core equations to the pricing and resolution mechanics:
 
-- `colab_interbank.ipynb`: Notebook version of the standalone
-  `interbank.py` with the same results but plotted using Bokeh.
+**Bailout probability** (eq. 3) -- larger banks are more likely to be bailed out:
+```
+b_j = A_{j,t-1} / A_{max,t-1}
+```
 
-- `interbank_lenderchange.py`: It contains the different algorithms that
-  control the change of lender in the model.
+**Bilateral loan cap** (eq. 6) -- the key distortion, denominator inflates loans for TBTF borrowers:
+```
+L_ij = min( [gamma*E_i + p_j*(1-b_j)*alpha*A_j] / [p_j*(1 - b_j*eta)] , C_i )
+```
 
-- `exp_runner.py`: A prototype for executing experiments with different
-  parameters and using MonteCarlo (using concurrent.futures to allow
-  multiple threads).
+**Two-state expected loss** (eq. 4) -- bailout vs. no-bailout states:
+```
+E(L|d) = (1-b_j)*(L_ij - alpha*A_j) + b_j*(1-eta)*L_ij
+```
 
-- `exp_runner_distributed.py`: A sub-prototype that uses ray library to
-  execute in a cluster.
+**Interest rate** (eq. 8) -- zero-profit condition with screening costs:
+```
+r_ij = [p_j * E(L|d) + kappa] / [(1-p_j) * L_ij]
+```
 
-- `exp_runner_no_concurrent.py`: Another sub-prototype that avoids the
-  use of parallelism.
+## Key Findings
 
-- `exp_runner_no_concurrent.py`: Another sub-prototype that avoids the
-  use of parallelism.
+### Interior Policy Optimum
 
-- `exp_runner_comparer.py`: A derivation of the former prototype though
-  to compare the evolution with $p_a$ (probability of attachment in an
-  Erdos-Renyi graph) in the $x$ axis and other parameters across the $y$
-  axis.
+![Total bankruptcies vs. eta under three fiscal regimes](doc/figures/three_regimes.png)
 
-- `exp_runner_surviving.py`: A derivation of the former prototype using
-  ray library to execute in a cluster.
+At rho=0.4, total bankruptcies are minimized at eta ~ 0.1 for both the socialized-tax and resolution-fund regimes. The resolution fund generates worse outcomes at high eta due to fund depletion (the "Lehman mechanism").
 
-- `experiments/`: directory with all the experiments conducted. The
-  results of that executions are stored in a folder determined inside
-  each experiment.
+### The Zombie Lending Channel
 
-- `utils/plot_psi.py`: Generate a table of axis_x x axis_y plots.
+![Zombie lending channel mechanism](doc/figures/zombie_mechanism.png)
 
-- `utils/labplot2_interbank.lml`: [LabPlot2](https://labplot.org/) file
-  to plot the results of the `interbank.py`. By the way the best way is
-  to use [Gretl](https://gretl.sourceforge.net/) as an export format.
+The TBTF bilateral exposure cap (eq. 6) creates an emergent zombie bank channel not present in the base model. Fire-sale survivors persist with depleted equity, collapsing their bilateral caps and rationing borrowers.
 
-- `algorithm.drawio` and `algorithm.drawio.pf`: the
-  [draw.io](https://www.drawio.com/) and PDF schema of the algorithm
-  used in the model to propagate shocks and to balance sheets.
+### Contagion Propagation
 
-# RL with Stable Baselines3
+![Contagion propagation chain](doc/figures/contagion_flow.png)
 
-- `interbank_agent.py`: agent to test using PPO
+At rho=0.4: liquidation proceeds = 48, depositors claim 135, lender recovers 0. Bad debt equals the full bilateral loan. One-hop propagation only.
 
-- `run_ppo.py`: run and simulate with PPO agent
+### Two Competing Forces
 
-- `run_td3.py`: run and simulate with TD3 algorithm
+![Two competing forces from rho](doc/figures/two_forces.png)
 
-- `models/XXXX.zip`: instances of Gymnasium.env trained to use with
-  `run_XXXX.py`
+Higher rho reduces shock deaths (Force A) but enables zombie survival that degrades lending capacity (Force B), producing a non-monotonic total.
 
-- `utils/plot_ppo.py`: auxiliary creator of plots to play the results of
-  PPO
+---
 
-- Usage:
+## Three Fiscal Regimes
 
-  ``` {.bash language="bash" basicstyle="\\ttfamily\\small"}
-  # train first and save the model env:
-  run_ppo.py --train ppo_10000 --t 10000 --verbose
+| Regime | `fiscal_regime` | Description |
+|--------|----------------|-------------|
+| No fiscal cost | `"none"` | Bailouts are free. Isolates pure moral hazard. |
+| Socialized tax | `"socialized_tax"` | End-of-period tax on surviving banks, proportional to assets. |
+| Resolution fund | `"resolution_fund"` | Pre-funded levy builds a war chest. Partial bailout if depleted. |
 
-  # use the trained env and generate a simulation of T=1000
-  # with Interbank model
-  run_ppo.py --load ppo_10000 --save results_ppo.txt
-  ```
+---
 
-# Basic usage of the model
+## Parameters
 
-<figure id="fig:algorithm" data-latex-placement="htb">
-<img src="doc/alg-000001.png" />
-<figcaption>Sequence of steps: grey boxes indicates moments in which
-that statistic is obtained</figcaption>
-</figure>
+### TBTF-specific (new)
 
-- `interbank.py --seed 1234 --t 500 --p 0.2`: Execute the model with
-  $T=500$ and $LenderChange$ algorithm of $ShockedMarket3$ with an
-  Erdös-Réni with probability of attachment $p_a=0.2$ and using a seed
-  for generating random values of $1234$ (same results if you generate
-  again with other equal parameters and repeat this integer number for
-  seed).
+| Symbol | Code name | Default | Role |
+|--------|-----------|---------|------|
+| gamma | `gamma_capital` | 0.08 | IRB capital adequacy fraction (eq. 6) |
+| eta | `eta_bailout` | 0.85 | Bailout recovery fraction (policy instrument) |
+| alpha | `alpha_collateral` | 0.05 | Collateral recovery for pricing (eqs. 4, 6, 8) |
+| -- | `fiscal_regime` | `"socialized_tax"` | Fiscal regime selector |
+| tau_fund | `fund_levy_rate` | 0.005 | Resolution fund levy rate |
+| -- | `fund_initial_balance` | 0.0 | Starting fund balance |
 
-- `interbank.py --save result --output_format csv --log DEBUG --logfile result.txt`:
-  Save the results in `result.csv` in $CSV$ and the detailed log in
-  `result.txt`.
-
-- `interbank.py --save result.gdt --stats_market --detail_banks 5,7`:
-  Save the results in `result.gdt`, a second file `resultb.gdt` with the
-  results for only banks and times participating really in the loans
-  market is generated, and also a third file `result_detailed.gdt` with
-  the concrete statistics for banks 5 and 7. With `--detail_times 10,12`
-  all specific details for all banks in times 10 and 12 are present in
-  this third file.
-
-- `interbank.py --fast`: Use a fast mechanism to execute the model
-  (useful when running big models or repetitions).
-
-# Statistics
-
-Different statistics can be obtained after running the model, either in
-**csv** output, or in **gdt** (Gretl format). This statistics collect
-data in each time for the average or individually, depending on the
-usage. Possible statistics obtained from the model are:
-
-- **active_borrowers**: Number of banks that are involved in a loan as
-  borrowers. Both values in global and **stats_market** will be the
-  same.
-
-- **active_lenders**: Number of banks that are involved in a loan as
-  borrowers. Both values in global and **stats_market** will be the
-  same.
-
-- **asset_i**: Assets of the lender of this bank ($D + E$)
-
-- **asset_j**: Assets of the borrowers of this bank ($D + E$)
-
-- **bad_debt**: Sum of the bad debt
-
-- **bankruptcies**: Number of banks that failed in this step
-
-- **bankrupcty_rationed**: Number of banks that failed in this step due
-  to rationing
-
-- **best_lender**: ID of the bank which more connections in the graph
-
-- **best_lender_clients**: Number of banks connected with the best
-  lender
-
-- **c**: Lender capacity ($1 - \frac{E}{maxE}$) of the bank
-
-- **communities**: Subsets of nodes with higher internal edge density
-  than connections to the rest of the graph
-
-- **communities_not_alone**: Number of **communities** that are not
-  formed by only one node
-
-- **deposits**: Sum of deposits $D$ of banks (of their balance
-  $L + C + R = D + E$)
-
-- **equity**: Sum of equity $E$ of all banks: $L + C + R = D + E$
-
-- **equity_lenders**: Average $E$ of banks who are lenders
-
-- **fitness**: Fitness ($\mu$) of the bank
-
-- **gcs**: When we use an Erdös--Rényi graph, the Giant Component Size
-  is the largest number of nodes that are interconnected.
-
-- **grade_avg**: Average number of edges (connections) for the total
-  banks
-
-- **incrementD**: Amount of ($\Delta D$) for the bank
-
-- **interest_rate**: Interest rate $r$ of the bank
-
-- **l_equity**: Log of equity ($log(E)$)
-
-- **leverage**: Financial leverage ($l/E$) of the bank considering only
-  the banks that are inside a loan, named **leverage\_** in Gretl due to
-  name restrictions of the environment.
-
-- **liquidity**: Total liquidity $L$ of the Banks $L + C + R = D + E$
-
-- **loans**: Amount borrowed by the bank
-
-- **maxE**: $E_{max}$ of the system
-
-- **num_banks**: Number of banks currently surviving in the model
-  (interesting when **allow_replacement_of_bankrupted=False**)
-
-- **num_loans**: Num of loans in this step. Both global and
-  **stats_market** will be the same
-
-- **num_of_rationed**: Number of banks that were rationed in this step
-  (needed money and were without any possible lender)
-
-- **policy**: Policy recommendation $\eta$ of the system in the range
-  $[0..1]$. As $\eta$ is a global value, the same number applies for all
-  banks.
-
-- **potential_credit_channels**: Considering there is a graph of
-  connections between banks, then **number_of_edges()** in the graph
-
-- **potential_lenders**: Number of banks in the first shock having a
-  positive shock ($\Delta D$)
-
-- **prob_bankruptcy**: Probability of bankruptcy
-  $p_b=1-\frac{E}{E_{max}}$, between $[0..1]$
-
-- **profits**: Profits obtained in that step
-
-- **psi**: Power market ($psi$) of the banks who are lenders, value
-  $[0..1]$
-
-- **rationing**: Total amount of the loans $l$ of the banks
-
-- **real_t**: Times in which are no loans are removed in the extra
-  statistics generated when we use **--stats_market**. Real $t$ instants
-  of time are stored in this variable to track when were really those
-  values are obtained in the original statistics.
-
-- **reserves**: Reserves $R$ in the balance $L + C + R = D + E$
-
-- **systemic_leverage**: Financial leverage but considering in the mean
-  the total banks of the model $N$
-
-The different statistics of information obtained in
-table [1](#table1){reference-type="ref" reference="table1"} are
-classified as:
-
-- Global: using **--save filename**: each data column in
-  **filename.gdt** will be obtained for all the $N$ banks in the model
-  for all instants time $T$ (rows)
-
-- With **--stats_market** what we obtain will be a file as
-  **filenameb.gdt** for the subsets of banks that in each time are
-  engaged in a real loan. So if in the time $t$ there are no loans, it
-  is removed from this statistics. The special value `real_t` indicates
-  which was the original time.
-
-- Individual is data obtained when we use **--detail_times** or
-  **--detail_banks**, and it stores **filename_detailed.gdt** of those
-  moments for all the banks individually or specific banks.
-
-- Graphs are data obtained also in **filename.gdt**, but only we have a
-  **LenderChange** algorithm with a random graph.
-
-::: {#table1}
-|  |  |  |  |  |  |
-|:---|:--:|:--:|:--:|:--:|:--:|
-| Name | Type | Global | **stats_market** | Individual | Graphs |
-| **active_borrowers** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **active_lenders** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **asset_i** | float | $\overline{x}/0$ | $\overline{x}/0$ | $\checkmark$ |  |
-| **asset_j** | float | $\overline{x}/0$ | $\overline{x}/0$ | $\checkmark$ |  |
-| **bad_debt** | float | $\sum$ | $\sum$ | $\checkmark$ |  |
-| **bankruptcies** | integer | $\sum$ | $\sum$ | $\checkmark$ |  |
-| **bankrupcty_rationed** | integer | $\sum$ | $\sum$ |  |  |
-| **best_lender** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **best_lender_clients** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **c** | float | $\overline{x}/nan$ | $\overline{x}/nan$ |  |  |
-| **communities** | integer |  |  |  | $\checkmark$ |
-| **communities_not_alone** | integer |  |  |  | $\checkmark$ |
-| **deposits** | float | $\sum$ | $\sum$ | $\checkmark$ |  |
-| **equity** | float | $\sum$ | $\sum$ |  |  |
-| **equity_lenders** | float | $\overline{x}$ |  |  |  |
-| **fitness** | float | $\overline{x}$ | $\overline{x}/nan$ | $\checkmark$ |  |
-| **gcs** | integer |  |  |  | $\checkmark$ |
-| **grade_avg** | integer |  |  |  | $\checkmark$ |
-| **incrementD** | float | $\sum$ | $\sum$ |  | $\checkmark$ |
-| **interest_rate** | float | $\overline{x}/0$ | $\overline{x} / nan$ | $\checkmark$ |  |
-| **l_equity** | float | $\sum$ | $\sum$ |  |  |
-| **leverage** / **leverage\_** | float | $\overline{x}$ | $\overline{x}/nan$ | $\checkmark$ |  |
-| **liquidity** | float | $\sum$ | $\sum$ | $\checkmark$ |  |
-| **loans** | float | $\sum$ | $\sum$ | $\checkmark$ |  |
-| **maxE** | float | $\checkmark$ | $\checkmark$ |  |  |
-| **num_banks** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **num_loans** | integer | $\checkmark$ | $\checkmark$ | $\checkmark$ |  |
-| **num_of_rationed** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **policy** | float | $\checkmark$ | $\checkmark$ |  |  |
-| **potential_credit_channels** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **potential_lenders** | integer | $\checkmark$ | $\checkmark$ |  |  |
-| **prob_bankruptcy** | float | $\checkmark$ | $\checkmark$ | $\checkmark$ |  |
-| **profits** | float | $\sum$ | $\sum$ |  | $\checkmark$ |
-| **psi** | float | $\checkmark/0$ | $\checkmark/nan$ |  | $\checkmark$ |
-| **rationing** | float | $\sum$ | $\sum$ |  | $\checkmark$ |
-| **real_t** | integer |  | $\checkmark$ |  |  |
-| **reserves** | float | $\sum$ | $\sum$ |  | $\checkmark$ |
-| **systemic_leverage** | float | $\overline{x}$ | $\overline{x}$ |  |  |
-
-:  Legend for the different columns are: $\checkmark$=value without any
-modification. $\sum$=sum of the value for all banks. $\overline{x}$ =
-average of the value for all banks. $0$ = No banks in this statistic.
-$nan$=Instead of zero, the value of \"not a number\" is used
-:::
+### Inherited from base model
+
+| Symbol | Code name | Default | Role |
+|--------|-----------|---------|------|
+| rho | `rho` | 0.4 | Fire-sale recovery rate (resolution) |
+| beta | `beta` | 5 | Boltzmann switching intensity |
+| mu | `mu` | 0.7 | Deposit shock mean |
+| omega | `omega` | 0.6 | Deposit shock dispersion |
+| phi | `phi` | 0.025 | BT screening cost (borrower) |
+| chi | `chi` | 0.015 | BT screening cost (lender) |
+| N | `N` | 50 | Number of banks |
+| T | `T` | 1000 | Time periods |
+
+---
+
+## How to Run
+
+### Setup
+```bash
+git clone https://github.com/frddguzman/econo-bankage.git
+cd econo-bankage
+python -m venv .venv
+source .venv/bin/activate      # Unix
+# .venv\Scripts\activate       # Windows
+pip install -r requirements.txt
+```
+
+### Command line
+```bash
+# Single simulation
+python run_tbtf.py
+
+# Monte Carlo sweep
+python run_mc.py
+
+# Parameter sweep (eta)
+python sweep_eta.py
+```
+
+### Interactive GUIs
+```bash
+python gui_zombie.py    # Zombie channel dashboard  -> http://127.0.0.1:5003
+python gui_sweep.py     # Parameter sweep GUI        -> http://127.0.0.1:5002
+python gui_tbtf.py      # General TBTF GUI           -> http://127.0.0.1:5001
+```
+
+---
+
+## Project Structure
+
+```
+interbank.py                 # Main model (~2500 lines) -- TBTF extension
+interbank_lenderchange.py    # Network formation algorithms (Boltzmann, BA, etc.)
+interbank_agent.py           # RL agent interface (from base repo)
+alternativa.tex              # Mathematical specification of TBTF extension
+
+gui_zombie.py                # Flask backend -- zombie channel dashboard
+gui_sweep.py                 # Flask backend -- parameter sweep
+gui_tbtf.py                  # Flask backend -- general TBTF
+templates/                   # HTML frontends for all three GUIs
+
+sweep_eta.py                 # CLI eta sweep
+run_mc.py                    # Monte Carlo runner
+run_tbtf.py                  # Single TBTF run
+run_ppo.py, run_td3.py       # RL runners (from base repo)
+exp_runner*.py                # Experiment framework (from base repo)
+experiments/                  # 87 experiment configurations
+
+tests/                        # Test suite
+doc/                          # LaTeX documentation + algorithm flowcharts
+doc/figures/                  # TikZ source + rendered PNGs
+utils/                        # Plotting utilities
+models/                       # Pre-trained RL models (from base repo)
+```
+
+---
+
+## Detailed Changes
+
+See [`CHANGELOG.md`](CHANGELOG.md) for a complete, equation-by-equation comparison of every modification relative to the upstream codebase.
+
+---
+
+## References
+
+- Lenzu, S. & Tedeschi, G. (2012). Systemic risk on different interbank network topologies. *Physica A*, 391(18), 4331--4341.
+- Berardi, S. & Tedeschi, G. (2017). From banks' strategies to financial (in)stability. *International Review of Economics & Finance*, 47, 255--272.

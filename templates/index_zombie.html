@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TBTF Zombie Channel Analysis</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f7; color: #333;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+
+  /* Header */
+  .header {
+    background: #fff; border-bottom: 1px solid #e5e7eb;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    padding: 12px 24px; position: sticky; top: 0; z-index: 20;
+  }
+  .header h1 {
+    font-size: 18px; color: #1a1a2e;
+  }
+  .header h1 span { color: #7c3aed; }
+  .header .subtitle {
+    font-size: 12px; color: #888; margin-top: 2px;
+  }
+
+  /* Main layout */
+  .app-layout {
+    display: flex; flex: 1; overflow: hidden;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 320px; min-width: 320px; background: #f9fafb;
+    border-right: 1px solid #e5e7eb; overflow-y: auto;
+    padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .sidebar-section {
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    overflow: hidden;
+  }
+  .sidebar-section.tbtf-section { border-left: 3px solid #7c3aed; }
+  .section-header {
+    padding: 8px 12px; font-weight: 600; font-size: 13px;
+    cursor: pointer; user-select: none; display: flex;
+    align-items: center; justify-content: space-between;
+    background: #fff;
+  }
+  .section-header:hover { background: #f9fafb; }
+  .section-header .indicator { font-size: 10px; color: #999; }
+  .section-body { padding: 4px 12px 8px; }
+  .section-body.collapsed { display: none; }
+
+  /* Param rows */
+  .param-row {
+    display: flex; align-items: center; padding: 3px 0; gap: 6px;
+  }
+  .param-row label { flex: 1; font-size: 12px; color: #555; white-space: nowrap; }
+  .param-row label .sym { font-weight: 600; color: #1a1a2e; margin-right: 2px; }
+  .param-row input, .param-row select {
+    width: 80px; padding: 4px 8px; border: 1px solid #d1d5db;
+    border-radius: 4px; font-size: 12px; text-align: right;
+  }
+  .param-row select { text-align: left; width: 140px; }
+  .param-row.swept input { background: #f0e6ff; border-color: #7c3aed; color: #7c3aed; cursor: not-allowed; opacity: 0.6; }
+  .param-row.swept label { color: #7c3aed; font-style: italic; }
+
+  /* Metrics bar */
+  .metrics-bar {
+    padding: 6px 12px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 16px; border-radius: 8px;
+  }
+  .metrics-bar span.title { font-size: 11px; font-weight: 600; color: #555; white-space: nowrap; }
+  .metrics-bar label {
+    font-size: 11px; color: #555; display: flex; align-items: center; gap: 3px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .metrics-bar label:hover { color: #1a1a2e; }
+  .metrics-bar input[type="checkbox"] { accent-color: #7c3aed; }
+
+  /* Radio/checkbox groups */
+  .radio-group, .checkbox-group {
+    display: flex; flex-direction: column; gap: 4px; padding: 4px 0;
+  }
+  .radio-group label, .checkbox-group label {
+    font-size: 12px; color: #555; display: flex; align-items: center; gap: 6px; cursor: pointer;
+  }
+  .radio-group input, .checkbox-group input { accent-color: #7c3aed; }
+
+  /* Sweep controls */
+  .sweep-controls, .mc-controls, .regime-checkboxes {
+    padding: 4px 0;
+  }
+  .sweep-controls .param-row input { width: 65px; }
+  .hidden { display: none; }
+
+  /* Param grid 2-col */
+  .param-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px;
+  }
+  .param-grid .param-row { padding: 2px 0; }
+  .param-grid .full-width { grid-column: 1 / -1; }
+
+  /* Run button */
+  #btn-run {
+    margin-top: 8px; padding: 12px; background: #7c3aed; color: #fff;
+    border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+    cursor: pointer; width: 100%; transition: background 0.15s;
+  }
+  #btn-run:hover { background: #6d28d9; }
+  #btn-run:disabled { background: #b4a0e5; cursor: wait; }
+  .run-status { font-size: 11px; color: #888; text-align: center; margin-top: 4px; min-height: 16px; }
+  .run-status.error { color: #dc2626; }
+  .progress-bar {
+    height: 3px; background: #e5e7eb; border-radius: 2px; margin-top: 4px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: #7c3aed; width: 0%; transition: width 0.3s;
+  }
+
+  /* Content area */
+  .content {
+    flex: 1; overflow-y: auto; padding: 24px;
+  }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex; gap: 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 20px;
+  }
+  .tab-btn {
+    padding: 8px 20px; background: transparent; border: none;
+    border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500;
+    color: #888; cursor: pointer; transition: all 0.15s;
+  }
+  .tab-btn:hover { color: #555; }
+  .tab-btn.active { color: #7c3aed; border-bottom-color: #7c3aed; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Stat cards */
+  .stat-cards {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;
+  }
+  .stat-card {
+    display: inline-flex; flex-direction: column; align-items: center;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    padding: 12px 16px; min-width: 140px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .stat-card .value { font-size: 22px; font-weight: 700; color: #1a1a2e; }
+  .stat-card .label { font-size: 11px; color: #888; margin-top: 2px; }
+
+  /* Chart panels */
+  .chart-panel {
+    background: #fff; border-radius: 8px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .chart-panel h3 {
+    font-size: 14px; color: #1a1a2e; margin-bottom: 8px;
+    padding-bottom: 6px; border-bottom: 1px solid #e5e7eb;
+  }
+
+  /* Placeholder */
+  .placeholder {
+    color: #aaa; font-size: 13px; text-align: center; padding: 80px 0;
+  }
+
+  /* Tables */
+  .data-table {
+    width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px;
+  }
+  .data-table th, .data-table td {
+    padding: 6px 10px; border: 1px solid #e5e7eb; text-align: right;
+  }
+  .data-table th {
+    background: #f3f4f6; font-weight: 600; text-align: center; cursor: pointer;
+  }
+  .data-table th:hover { background: #e5e7eb; }
+  .data-table tbody tr:nth-child(even) { background: #fafafa; }
+  .data-table td:first-child { font-weight: 600; text-align: center; }
+
+  /* Analysis tab */
+  .analysis-section {
+    background: #fff; border-radius: 8px; padding: 20px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .analysis-section h3 {
+    font-size: 16px; color: #1a1a2e; margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 2px solid #7c3aed;
+  }
+  .analysis-section h4 {
+    font-size: 13px; color: #555; margin: 12px 0 6px;
+  }
+  .analysis-section p, .analysis-section li {
+    font-size: 13px; color: #555; line-height: 1.6;
+  }
+  .analysis-section ol, .analysis-section ul {
+    margin-left: 20px; margin-bottom: 8px;
+  }
+  .analysis-section code {
+    background: #f3f4f6; padding: 1px 5px; border-radius: 3px;
+    font-size: 12px; font-family: 'SF Mono', 'Consolas', monospace;
+  }
+  .preset-buttons {
+    display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;
+  }
+  .preset-btn {
+    background: #f3f0ff; border: 1px solid #7c3aed; color: #7c3aed;
+    border-radius: 6px; padding: 8px 16px; font-size: 12px; font-weight: 500;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .preset-btn:hover { background: #ede9fe; }
+
+  /* Spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid #fff; border-top-color: transparent;
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1><span>TBTF</span> Zombie Channel Analysis</h1>
+  <div class="subtitle">Bankruptcy decomposition across &rho;, &eta;, and fiscal regimes</div>
+</div>
+
+<!-- APP LAYOUT -->
+<div class="app-layout">
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+
+  <!-- Mode Selection -->
+  <div class="sidebar-section">
+    <div class="section-header" onclick="toggleSection(this)">
+      Mode Selection <span class="indicator">&#9662;</span>
+    </div>
+    <div class="section-body">
+      <div class="radio-group">
+        <label><input type="radio" name="mode" value="single" checked onchange="switchMode(this.value)"> Single Run</label>
+        <label><input type="radio" name="mode" value="sweep" onchange="switchMode(this.value)"> Parameter Sweep</label>
+        <label><input type="radio" name="mode" value="compare" onchange="switchMode(this.value)"> Regime Comparison</label>
+      </div>
+
+      <!-- Sweep-specific controls -->
+      <div id="sweep-opts" class="sweep-controls hidden">
+        <div class="param-row" style="margin-top:6px">
+          <label>Sweep parameter</label>
+          <select id="sweep-param" style="width:140px" onchange="onSweepParamChange()">
+            <option value="rho">&rho; Fire sale cost</option>
+            <option value="eta_bailout">&eta; Bailout recovery</option>
+            <option value="gamma_capital">&gamma; Capital adequacy</option>
+            <option value="alpha_collateral">&alpha; Pricing recovery</option>
+            <option value="beta">&beta; Boltzmann intensity</option>
+            <option value="mu">&mu; Shock mean</option>
+            <option value="omega">&omega; Shock dispersion</option>
+            <option value="fund_levy_rate">&tau; Fund levy rate</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>From</label>
+          <input id="sweep-from" type="number" value="0" step="0.05" style="width:65px">
+        </div>
+        <div class="param-row">
+          <label>To</label>
+          <input id="sweep-to" type="number" value="0.95" step="0.05" style="width:65px">
+        </div>
+        <div class="param-row">
+          <label>Step</label>
+          <input id="sweep-step" type="number" value="0.1" step="0.01" style="width:65px">
+        </div>
+        <div class="mc-controls">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0">
+            <input type="checkbox" id="mc-enabled" onchange="toggleMC()"> MC Averaging
+          </label>
+          <div id="mc-opts" class="hidden">
+            <div class="param-row">
+              <label>Seeds</label>
+              <input id="mc-seeds" type="number" value="20" min="2" max="100" style="width:65px">
+            </div>
+          </div>
+        </div>
+        <div class="param-row">
+          <label>Workers</label>
+          <input id="workers" type="number" value="6" min="1" max="12" style="width:65px">
+        </div>
+      </div>
+
+      <!-- Regime comparison controls -->
+      <div id="compare-opts" class="regime-checkboxes hidden">
+        <div style="font-size:11px;color:#888;margin:6px 0 4px">Select regimes to compare:</div>
+        <div class="checkbox-group">
+          <label><input type="checkbox" value="none" checked class="regime-cb"> No fiscal cost</label>
+          <label><input type="checkbox" value="socialized_tax" checked class="regime-cb"> Socialized tax</label>
+          <label><input type="checkbox" value="resolution_fund" checked class="regime-cb"> Resolution fund</label>
+        </div>
+        <div style="font-size:11px;color:#888;margin:8px 0 4px">Sweep parameter for comparison:</div>
+        <div class="param-row" style="margin-top:4px">
+          <label>Sweep</label>
+          <select id="compare-sweep-param" style="width:140px">
+            <option value="eta_bailout" selected>&eta; Bailout recovery</option>
+            <option value="rho">&rho; Fire sale cost</option>
+            <option value="gamma_capital">&gamma; Capital adequacy</option>
+            <option value="fund_levy_rate">&tau; Fund levy rate</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>From</label>
+          <input id="compare-from" type="number" value="0" step="0.05" style="width:65px">
+        </div>
+        <div class="param-row">
+          <label>To</label>
+          <input id="compare-to" type="number" value="0.95" step="0.05" style="width:65px">
+        </div>
+        <div class="param-row">
+          <label>Step</label>
+          <input id="compare-step" type="number" value="0.1" step="0.01" style="width:65px">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model Parameters -->
+  <div class="sidebar-section">
+    <div class="section-header" onclick="toggleSection(this)">
+      Model Parameters <span class="indicator">&#9662;</span>
+    </div>
+    <div class="section-body">
+      <div class="param-grid">
+        <div class="param-row">
+          <label><span class="sym">N</span> Banks</label>
+          <input id="p-N" type="number" value="50" min="2" max="200" step="1">
+        </div>
+        <div class="param-row">
+          <label><span class="sym">T</span> Periods</label>
+          <input id="p-T" type="number" value="1000" min="10" max="5000" step="10">
+        </div>
+        <div class="param-row" data-param="seed">
+          <label>Seed</label>
+          <input id="p-seed" type="number" value="26462" min="0" step="1">
+        </div>
+        <div class="param-row">
+          <label>Algorithm</label>
+          <select id="p-algorithm" style="width:80px">
+            <option value="Boltzmann" selected>Boltzmann</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label><span class="sym">p</span> Attach.</label>
+          <input id="p-lc_p" type="number" value="0.5" min="0" max="1" step="0.05">
+        </div>
+        <div class="param-row">
+          <label><span class="sym">m</span> Degree</label>
+          <input id="p-lc_m" type="number" value="1" min="1" step="1">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TBTF / Bailout -->
+  <div class="sidebar-section tbtf-section">
+    <div class="section-header" onclick="toggleSection(this)">
+      TBTF / Bailout <span class="indicator">&#9662;</span>
+    </div>
+    <div class="section-body">
+      <div class="param-row" id="fiscal-regime-row">
+        <label>Fiscal Regime</label>
+        <select id="p-fiscal_regime" onchange="toggleFiscalParams()" style="width:140px">
+          <option value="none">No fiscal cost</option>
+          <option value="socialized_tax" selected>Socialized tax</option>
+          <option value="resolution_fund">Resolution fund</option>
+        </select>
+      </div>
+      <div class="param-row" data-param="eta_bailout">
+        <label><span class="sym">&eta;</span> Bailout recovery</label>
+        <input id="p-eta_bailout" type="number" value="0.85" min="0" max="1" step="0.01">
+      </div>
+      <div class="param-row" data-param="gamma_capital">
+        <label><span class="sym">&gamma;</span> Capital adequacy</label>
+        <input id="p-gamma_capital" type="number" value="0.10" min="0" max="1" step="0.01">
+      </div>
+      <div class="param-row" data-param="alpha_collateral">
+        <label><span class="sym">&alpha;</span> Pricing recovery</label>
+        <input id="p-alpha_collateral" type="number" value="0.05" min="0" max="1" step="0.01">
+      </div>
+      <div id="fund-params" class="hidden">
+        <div class="param-row" data-param="fund_levy_rate">
+          <label><span class="sym">&tau;</span> Fund levy rate</label>
+          <input id="p-fund_levy_rate" type="number" value="0.0001" min="0" max="0.05" step="0.0001">
+        </div>
+        <div class="param-row">
+          <label>Fund initial balance</label>
+          <input id="p-fund_initial_balance" type="number" value="0" min="0" step="1">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recovery & Shocks -->
+  <div class="sidebar-section">
+    <div class="section-header" onclick="toggleSection(this)">
+      Recovery &amp; Shocks <span class="indicator">&#9662;</span>
+    </div>
+    <div class="section-body">
+      <div class="param-row" data-param="rho">
+        <label><span class="sym">&rho;</span> Fire sale cost</label>
+        <input id="p-rho" type="number" value="0.4" min="0" max="1" step="0.01">
+      </div>
+      <div class="param-row" data-param="beta">
+        <label><span class="sym">&beta;</span> Boltzmann intensity</label>
+        <input id="p-beta" type="number" value="5" min="0" step="0.1">
+      </div>
+      <div class="param-row" data-param="alfa">
+        <label><span class="sym">&alpha;<sub>BT</sub></span> Bankruptcy threshold</label>
+        <input id="p-alfa" type="number" value="0.1" min="0" step="0.01">
+      </div>
+      <div class="param-row" data-param="mu">
+        <label><span class="sym">&mu;</span> Shock mean</label>
+        <input id="p-mu" type="number" value="0.7" min="0" step="0.01">
+      </div>
+      <div class="param-row" data-param="omega">
+        <label><span class="sym">&omega;</span> Shock dispersion</label>
+        <input id="p-omega" type="number" value="0.5" min="0" step="0.01">
+      </div>
+    </div>
+  </div>
+
+  <!-- Run button -->
+  <button id="btn-run" onclick="runSimulation()">Run Simulation</button>
+  <button id="btn-save" onclick="saveResults()" style="display:none;margin-top:6px;padding:10px;background:#059669;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;width:100%;transition:background 0.15s" onmouseover="this.style.background='#047857'" onmouseout="this.style.background='#059669'">Save Results</button>
+  <div class="run-status" id="status"></div>
+  <div class="progress-bar" id="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+
+</div><!-- /sidebar -->
+
+<!-- CONTENT -->
+<div class="content">
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('decomposition')">Decomposition</button>
+    <button class="tab-btn" id="tab-btn-network" onclick="switchTab('network')">Network</button>
+    <button class="tab-btn" onclick="switchTab('analysis')">Analysis</button>
+  </div>
+
+  <!-- Metrics bar (sweep mode only) -->
+  <div class="metrics-bar" id="metrics-bar" style="display:none">
+    <span class="title">Metrics:</span>
+    {% for key, m in output_metrics.items() %}
+    <label><input type="checkbox" value="{{ key }}" {% if key in ['bankruptcy', 'tax_induced_failures'] %}checked{% endif %}> {{ m.label }}</label>
+    {% endfor %}
+  </div>
+
+  <!-- Tab: Decomposition -->
+  <div class="tab-panel active" id="tab-decomposition">
+
+    <!-- Single run content -->
+    <div id="single-results">
+      <div class="placeholder" id="single-placeholder">Run a simulation to see results</div>
+      <div id="single-charts" class="hidden">
+        <div class="stat-cards" id="stat-cards"></div>
+        <div class="chart-panel">
+          <h3>Bankruptcy Decomposition Over Time</h3>
+          <div id="chart-decomp" style="height:400px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Balance Sheet &amp; Liquidity</h3>
+          <div id="chart-balance" style="height:300px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Bailout Activity</h3>
+          <div id="chart-bailout" style="height:300px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sweep results -->
+    <div id="sweep-results" class="hidden">
+      <div class="placeholder" id="sweep-placeholder">Configure a sweep and click Run</div>
+      <div id="sweep-charts" class="hidden">
+        <div class="chart-panel">
+          <h3 id="sweep-total-title">Selected Metrics by Parameter</h3>
+          <div id="chart-sweep-total" style="height:400px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3 id="sweep-chart-title">Bankruptcy Decomposition by Parameter</h3>
+          <div id="chart-sweep-decomp" style="height:450px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3 id="sweep-contagion-title">Contagion &amp; Zombies by Parameter</h3>
+          <div id="chart-sweep-contagion" style="height:350px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Data Table</h3>
+          <table class="data-table" id="sweep-table"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Compare results -->
+    <div id="compare-results" class="hidden">
+      <div class="placeholder" id="compare-placeholder">Select regimes and click Run</div>
+      <div id="compare-charts" class="hidden">
+        <div class="chart-panel">
+          <h3 id="compare-sweep-title">Total Bankruptcies by Parameter &mdash; Regime Overlay</h3>
+          <div id="chart-compare-sweep" style="height:450px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Decomposition at Current Parameters</h3>
+          <div id="chart-compare-bars" style="height:350px"></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Regime Comparison Table</h3>
+          <table class="data-table" id="compare-table"></table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Tab: Network -->
+  <div class="tab-panel" id="tab-network">
+    <div class="placeholder" id="network-placeholder">Run a single simulation to see the network</div>
+    <div id="network-content" class="hidden">
+      <div class="chart-panel" style="text-align:center">
+        <h3>Bank Network Graph</h3>
+        <img id="network-img" style="max-width:100%;max-height:500px;border-radius:4px" alt="Bank network">
+      </div>
+      <div class="chart-panel">
+        <h3>Bank Data</h3>
+        <table class="data-table" id="bank-table"></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Analysis -->
+  <div class="tab-panel" id="tab-analysis">
+
+    <div class="analysis-section">
+      <h3>1. The Finding &mdash; Non-Monotonic &rho;</h3>
+      <p style="background:#f7f6f3;padding:10px 14px;border-left:3px solid #7c3aed;margin-bottom:12px">
+        The TBTF extension introduces an IRB bilateral exposure cap (eq.&nbsp;6) that creates an <strong>emergent zombie bank channel</strong> not present in the base Lenzu-Tedeschi / Berardi-Tedeschi model.
+      </p>
+      <p>Shock bankruptcies decrease monotonically with &rho; (the professor's expected channel). But rationing and contagion deaths <em>increase</em> at moderate &rho;, creating a <strong>non-monotonic total</strong>. This is not a bug &mdash; it is an emergent property of the bilateral exposure cap.</p>
+      <div class="preset-buttons">
+        <button class="preset-btn" onclick="applyPreset('rho_sweep_no_eta')">
+          &#9654; Run: &rho; Sweep (&eta;=0, no fiscal cost)
+        </button>
+      </div>
+    </div>
+
+    <div class="analysis-section">
+      <h3>2. The Mechanism &mdash; Zombie Lending Channel</h3>
+      <ol style="padding-left:20px">
+        <li style="margin-bottom:12px">
+          <strong>Step 1 &mdash; Fire sale survival creates zombies.</strong>
+          A bank facing a liquidity shortfall resorts to a fire sale. The accounting cost of recovering an amount <code>a</code> is <code>a/&rho;</code>, deducted from total assets <code>L</code>.
+          At <code>&rho;=0.1</code>: cost = 10&times; amount &rarr; exceeds <code>L</code> &rarr; instant bankruptcy &rarr; fresh replacement enters.
+          At <code>&rho;=0.4</code>: cost = 2.5&times; amount &rarr; survivable &rarr; bank persists with reduced <code>L</code>, <code>E</code>.
+          At <code>&rho;=0.9</code>: cost = 1.11&times; amount &rarr; barely scratched.
+        </li>
+        <li style="margin-bottom:12px">
+          <strong>Step 2 &mdash; Zombies degrade lending via the IRB bilateral cap.</strong>
+          <div style="background:#f7f6f3;padding:8px 12px;border:1px solid #ddd;margin:6px 0;font-family:Consolas,monospace;font-size:12px">
+            Eq.&nbsp;6: L<sub>ij</sub> = min( (&gamma;&middot;E<sub>i</sub> + p<sub>j</sub>&middot;(1&minus;b<sub>j</sub>)&middot;&alpha;&middot;A<sub>j</sub>) / (p<sub>j</sub>&middot;(1&minus;b<sub>j</sub>&middot;&eta;)) , C<sub>i</sub> )
+          </div>
+          A zombie's depleted equity <code>E<sub>i</sub></code> shrinks the term <code>&gamma;&middot;E<sub>i</sub></code>, collapsing the bilateral exposure cap. The professor's base model has no bilateral cap &mdash; lenders supply <code>min(demand, C<sub>i</sub>)</code>. <strong>Eq.&nbsp;6 makes weak banks toxic to the network.</strong>
+        </li>
+        <li style="margin-bottom:12px">
+          <strong>Step 3 &mdash; Rationing cascade.</strong>
+          When a zombie becomes a lender, its tiny bilateral cap rations borrowers. Rationed borrowers must fire-sell, potentially creating more zombies &mdash; a positive feedback loop.
+        </li>
+        <li style="margin-bottom:12px">
+          <strong>Step 4 &mdash; Delayed contagion.</strong>
+          Zombies persist for multiple periods, accumulating interbank exposure. When they finally fail: <code>&rho;&middot;L &minus; D &lt; 0</code> for all <code>&rho; &lt; 1.125</code> (since <code>D=135 &gt; L=120</code>) &mdash; the lender recovers nothing. Bad debt equals the full loan, driving lender equity negative: a contagion death.
+        </li>
+      </ol>
+      <div style="background:#fef3f3;border:1px solid #d4a0a0;padding:10px 14px;margin:10px 0;font-size:12px">
+        <strong>Data proof:</strong> Rationing deaths: 5,700 (&rho;=0) &rarr; 7,166 (&rho;=0.8) = <strong>+1,466 extra deaths</strong> from the zombie lending channel. Contagion deaths: 457 (&rho;=0) &rarr; 1,270 (&rho;=0.4) = zombie deaths are <strong>more damaging</strong> than immediate failures.
+      </div>
+      <div style="background:#fffbe6;border:1px solid #d4c96a;padding:10px 14px;margin:10px 0;font-size:12px;font-style:italic">
+        <strong>Note on &rho;=0.9:</strong> There are 13,736 fire sale survivors but only 248 total deaths and 0 contagion. Fire sales are so cheap that "zombies" heal naturally. The dangerous zone is <strong>moderate &rho; (0.3&ndash;0.8)</strong> where banks are weak enough to eventually die but strong enough to persist.
+      </div>
+    </div>
+
+    <div class="analysis-section">
+      <h3>3. The Role of &eta; &mdash; Cushioning Zombie Deaths</h3>
+      <p>&eta; does <em>not</em> prevent zombie formation (that is purely a &rho; phenomenon). &eta; cushions zombie <em>deaths</em>: when a zombie finally fails, the bailout absorbs <code>&eta;&middot;l</code>, reducing bad debt to the lender. Contagion drops from 1,270 (&eta;=0) to 719 (&eta;=0.9).</p>
+      <p>When bailouts are free (no-tax regime), more &eta; is always weakly beneficial &mdash; monotonically decreasing total bankruptcies. Under <strong>socialized tax</strong>, an interior optimum emerges at &eta;*&approx;0.1 because the fiscal drag from the crisis tax eventually outweighs the bailout cushion.</p>
+      <div class="preset-buttons">
+        <button class="preset-btn" onclick="applyPreset('eta_sweep_notax')">
+          &#9654; &eta; Sweep (no fiscal cost, &rho;=0.4)
+        </button>
+        <button class="preset-btn" onclick="applyPreset('eta_sweep_tax')">
+          &#9654; &eta; Sweep (socialized tax, &rho;=0.4)
+        </button>
+      </div>
+    </div>
+
+    <div class="analysis-section">
+      <h3>4. Resolution Fund &mdash; The Lehman Surprise</h3>
+      <p>Banks price loans using eq.&nbsp;6 with the full policy &eta; &mdash; they do <em>not</em> observe the fund balance. At &eta;&gt;0, the denominator <code>(1&minus;b<sub>j</sub>&middot;&eta;)</code> shrinks, inflating loans. But the fund starts empty (<code>fund_initial_balance=0</code>) and recharges slowly (<code>&tau;=0.0001</code>).</p>
+      <p><strong>At low &eta;</strong> (fund can cover demand): the resolution fund outperforms free bailouts &mdash; fiscal discipline without depletion.</p>
+      <p><strong>At high &eta;</strong> (demand overwhelms fund): loans are inflated by &eta; expectations, but bailouts fail when the fund runs dry. Moral hazard is priced in, the protection is gone. This is the <strong>Lehman mechanism</strong>: counterparties priced exposure assuming bailout, the guarantee evaporated.</p>
+      <div style="background:#fffbe6;border:1px solid #d4c96a;padding:10px 14px;margin:10px 0;font-size:12px;font-style:italic">
+        <strong>Note on &rho;=0.1 with resolution fund:</strong> Even &eta;=0.1 is worse than &eta;=0. The fund can never accumulate enough to cover even modest bailout demand, but loans are already distorted by &eta; expectations.
+      </div>
+      <div class="preset-buttons">
+        <button class="preset-btn" onclick="applyPreset('eta_sweep_fund')">
+          &#9654; &eta; Sweep (resolution fund, &rho;=0.4)
+        </button>
+        <button class="preset-btn" onclick="applyPreset('regime_compare')">
+          &#9654; Regime Comparison (&rho;=0.4, &eta;=0.5)
+        </button>
+      </div>
+    </div>
+
+    <div class="analysis-section">
+      <h3>5. Summary</h3>
+      <ol style="padding-left:20px">
+        <li style="margin-bottom:8px">The IRB bilateral cap (eq.&nbsp;6) introduces a <strong>zombie lending channel</strong>: fire sale survivors with depleted equity cannot lend effectively, creating rationing cascades. This is absent from the base model which has no bilateral exposure limits.</li>
+        <li style="margin-bottom:8px">The zombie channel creates <strong>non-monotonic &rho; dynamics</strong>: moderate fire-sale recovery rates (0.3&ndash;0.8) are paradoxically more dangerous than extreme rates, because they allow insolvent banks to persist and degrade network lending capacity.</li>
+        <li style="margin-bottom:8px">The resolution fund creates a <strong>moral hazard trap</strong>: banks price loans assuming available bailouts, but the fund's finite capacity means the guarantee can evaporate &mdash; reproducing the Lehman Brothers surprise mechanism in a controlled simulation environment.</li>
+      </ol>
+    </div>
+
+  </div>
+
+</div><!-- /content -->
+</div><!-- /app-layout -->
+
+<script>
+/* ================================================================
+   CONSTANTS & CONFIG
+   ================================================================ */
+
+var LAYOUT_BASE = {
+  font: {family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', size: 12},
+  paper_bgcolor: 'white',
+  plot_bgcolor: '#fafafa',
+  margin: {l: 60, r: 60, t: 40, b: 50},
+  hovermode: 'x unified',
+  xaxis: {gridcolor: '#e5e7eb'},
+  yaxis: {gridcolor: '#e5e7eb'},
+};
+
+var COLORS = {
+  shock: '#f97316',
+  rationing: '#eab308',
+  repay: '#8b5cf6',
+  contagion: '#ef4444',
+  fiscal: '#ec4899',
+  zombies: '#6b7280',
+  total: '#dc2626',
+  equity: '#059669',
+  liquidity: '#7c3aed',
+  loans: '#d97706',
+  bailout: '#7c3aed',
+  fund: '#15803d',
+};
+
+var LINE_COLORS = ['#dc2626','#db2777','#f97316','#eab308','#8b5cf6','#ef4444','#ec4899',
+  '#059669','#2563eb','#7c3aed','#d97706','#64748b','#15803d','#b91c1c','#0369a1','#6b7280'];
+
+/* OUTPUT_METRICS from server (for label lookup in JS) */
+var OUTPUT_METRICS = {};
+{% for key, m in output_metrics.items() %}
+OUTPUT_METRICS['{{ key }}'] = {label: '{{ m.label }}', color: '{{ m.color }}'};
+{% endfor %}
+
+var PARAM_LABELS = {
+  rho: '\u03c1 (fire sale cost)', eta_bailout: '\u03b7 (bailout recovery)',
+  gamma_capital: '\u03b3 (capital adequacy)', alpha_collateral: '\u03b1 (pricing recovery)',
+  beta: '\u03b2 (Boltzmann intensity)', mu: '\u03bc (shock mean)',
+  omega: '\u03c9 (shock dispersion)', fund_levy_rate: '\u03c4 (fund levy rate)',
+  alfa: '\u03b1_BT (bankruptcy threshold)',
+};
+
+var PLOT_CFG = {responsive: true, displayModeBar: false};
+
+var currentMode = 'single';
+var lastSingleData = null;
+var lastSweepData = null;
+var lastCompareData = null;
+
+/* ================================================================
+   UI HELPERS
+   ================================================================ */
+
+function toggleSection(header) {
+  var body = header.nextElementSibling;
+  var indicator = header.querySelector('.indicator');
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    indicator.innerHTML = '&#9662;';
+  } else {
+    body.classList.add('collapsed');
+    indicator.innerHTML = '&#9656;';
+  }
+}
+
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.textContent.toLowerCase().indexOf(tabName.toLowerCase().substring(0, 4)) >= 0);
+  });
+  document.querySelectorAll('.tab-panel').forEach(function(panel) {
+    panel.classList.toggle('active', panel.id === 'tab-' + tabName);
+  });
+}
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('sweep-opts').classList.toggle('hidden', mode !== 'sweep');
+  document.getElementById('compare-opts').classList.toggle('hidden', mode !== 'compare');
+  document.getElementById('fiscal-regime-row').classList.toggle('hidden', mode === 'compare');
+  document.getElementById('single-results').classList.toggle('hidden', mode !== 'single');
+  document.getElementById('sweep-results').classList.toggle('hidden', mode !== 'sweep');
+  document.getElementById('compare-results').classList.toggle('hidden', mode !== 'compare');
+  document.getElementById('metrics-bar').style.display = (mode === 'sweep') ? '' : 'none';
+  /* Network tab: hide in non-single modes */
+  var networkBtn = document.getElementById('tab-btn-network');
+  if (mode === 'single') {
+    networkBtn.style.display = '';
+  } else {
+    networkBtn.style.display = 'none';
+    if (document.getElementById('tab-network').classList.contains('active')) switchTab('decomposition');
+  }
+  /* Sweep param grayout */
+  if (mode === 'sweep') { onSweepParamChange(); } else { clearSweptState(); }
+  /* Hide save button on mode switch */
+  document.getElementById('btn-save').style.display = 'none';
+}
+
+function clearSweptState() {
+  var seedRow = document.getElementById('p-seed').closest('.param-row');
+  var mcOn = document.getElementById('mc-enabled').checked;
+  document.querySelectorAll('.param-row.swept').forEach(function(el) {
+    if (el === seedRow && mcOn) return;
+    el.classList.remove('swept');
+    var inp = el.querySelector('input'); if (inp) inp.disabled = false;
+  });
+}
+
+function onSweepParamChange() {
+  var key = document.getElementById('sweep-param').value;
+  var seedRow = document.getElementById('p-seed').closest('.param-row');
+  document.querySelectorAll('.param-row.swept').forEach(function(el) {
+    if (el === seedRow) return;
+    el.classList.remove('swept');
+    var inp = el.querySelector('input'); if (inp) inp.disabled = false;
+  });
+  var row = document.querySelector('.param-row[data-param="' + key + '"]');
+  if (row) { row.classList.add('swept'); var inp = row.querySelector('input'); if (inp) inp.disabled = true; }
+}
+
+function toggleFiscalParams() {
+  var regime = document.getElementById('p-fiscal_regime').value;
+  document.getElementById('fund-params').classList.toggle('hidden', regime !== 'resolution_fund');
+}
+
+function toggleMC() {
+  var on = document.getElementById('mc-enabled').checked;
+  document.getElementById('mc-opts').classList.toggle('hidden', !on);
+  var seedRow = document.getElementById('p-seed').closest('.param-row');
+  if (on) { seedRow.classList.add('swept'); document.getElementById('p-seed').disabled = true; }
+  else { seedRow.classList.remove('swept'); document.getElementById('p-seed').disabled = false; }
+}
+
+function setStatus(msg, isError) {
+  var el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'run-status' + (isError ? ' error' : '');
+}
+function setProgress(pct) { document.getElementById('progress-fill').style.width = pct + '%'; }
+
+function mkLayout(title, extra) {
+  return Object.assign({}, LAYOUT_BASE, {title: {text: title, font: {size: 13}}}, extra || {});
+}
+
+function hexToRgba(hex, alpha) {
+  var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+}
+
+function getSelectedMetrics() {
+  var m = [];
+  document.querySelectorAll('#metrics-bar input[type="checkbox"]:checked').forEach(function(cb) { m.push(cb.value); });
+  return m;
+}
+
+/* ================================================================
+   COLLECT CONFIG
+   ================================================================ */
+
+function collectConfig() {
+  var cfg = {};
+  var floatKeys = ['eta_bailout', 'gamma_capital', 'alpha_collateral', 'rho', 'beta', 'alfa', 'mu', 'omega', 'lc_p', 'fund_levy_rate', 'fund_initial_balance', 'phi', 'chi'];
+  var intKeys = ['N', 'T', 'seed', 'lc_m'];
+  floatKeys.forEach(function(k) {
+    var el = document.getElementById('p-' + k);
+    if (el && !el.disabled) cfg[k] = parseFloat(el.value);
+  });
+  intKeys.forEach(function(k) {
+    var el = document.getElementById('p-' + k);
+    if (el && (!el.disabled || k === 'seed')) cfg[k] = parseInt(el.value);
+  });
+  cfg.algorithm = document.getElementById('p-algorithm').value;
+  cfg.fiscal_regime = document.getElementById('p-fiscal_regime').value;
+  return cfg;
+}
+
+/* ================================================================
+   RUN SIMULATION (dispatcher)
+   ================================================================ */
+
+async function runSimulation() {
+  var btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Running...';
+  setStatus('', false);
+  setProgress(0);
+  try {
+    if (currentMode === 'single') await runSingle();
+    else if (currentMode === 'sweep') await runSweep();
+    else if (currentMode === 'compare') await runCompare();
+  } catch (err) {
+    setStatus('Error: ' + err.message, true);
+    console.error(err);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run Simulation';
+}
+
+/* ================================================================
+   SINGLE RUN
+   ================================================================ */
+
+async function runSingle() {
+  setStatus('Simulation in progress...', false);
+  var cfg = collectConfig();
+  var resp = await fetch('/api/simulate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg),
+  });
+  var data = await resp.json();
+  if (data.error) { setStatus('Error: ' + data.error, true); return; }
+  lastSingleData = data;
+  renderSingleRun(data);
+  setStatus('Done \u2014 ' + data.time.length + ' periods simulated', false);
+}
+
+function renderSingleRun(data) {
+  document.getElementById('single-placeholder').classList.add('hidden');
+  document.getElementById('single-charts').classList.remove('hidden');
+
+  var t = data.time || [];
+  var sum = function(arr) { return (arr || []).reduce(function(a, b) { return a + (b||0); }, 0); };
+
+  var totalBankruptcies = sum(data.bankruptcies_shock) + sum(data.bankruptcies_rationing) + sum(data.bankruptcies_repay) + sum(data.bankruptcies_contagion) + sum(data.bankruptcies_fiscal);
+  var stats = [
+    {value: totalBankruptcies, label: 'Total Bankruptcies', color: COLORS.total},
+    {value: sum(data.bankruptcies_shock), label: 'Shock', color: COLORS.shock},
+    {value: sum(data.bankruptcies_rationing), label: 'Rationing', color: COLORS.rationing},
+    {value: sum(data.bankruptcies_repay), label: 'Repayment', color: COLORS.repay},
+    {value: sum(data.bankruptcies_contagion), label: 'Contagion', color: COLORS.contagion},
+    {value: sum(data.fire_sale_survivors || []), label: 'Zombies', color: COLORS.zombies},
+  ];
+
+  let cardsHtml = '';
+  stats.forEach(function(s) {
+    cardsHtml += '<div class="stat-card"><div class="value" style="color:' + s.color + '">' + s.value + '</div><div class="label">' + s.label + '</div></div>';
+  });
+  document.getElementById('stat-cards').innerHTML = cardsHtml;
+
+  /* Chart 1: Bankruptcy decomposition stacked area */
+  var decompTraces = [
+    {x: t, y: data.bankruptcies_shock, name: 'Shock', stackgroup: 'one', line: {color: COLORS.shock}, fillcolor: hexToRgba(COLORS.shock, 0.6)},
+    {x: t, y: data.bankruptcies_rationing, name: 'Rationing', stackgroup: 'one', line: {color: COLORS.rationing}, fillcolor: hexToRgba(COLORS.rationing, 0.6)},
+    {x: t, y: data.bankruptcies_repay, name: 'Repayment', stackgroup: 'one', line: {color: COLORS.repay}, fillcolor: hexToRgba(COLORS.repay, 0.6)},
+    {x: t, y: data.bankruptcies_contagion, name: 'Contagion', stackgroup: 'one', line: {color: COLORS.contagion}, fillcolor: hexToRgba(COLORS.contagion, 0.6)},
+    {x: t, y: data.bankruptcies_fiscal, name: 'Fiscal', stackgroup: 'one', line: {color: COLORS.fiscal}, fillcolor: hexToRgba(COLORS.fiscal, 0.6)},
+  ];
+
+  if (data.fire_sale_survivors) {
+    decompTraces.push({
+      x: t, y: data.fire_sale_survivors, name: 'Fire Sale Survivors',
+      mode: 'lines', line: {color: COLORS.zombies, width: 2, dash: 'dash'},
+      yaxis: 'y2',
+    });
+  }
+
+  Plotly.newPlot('chart-decomp', decompTraces, mkLayout('', {
+    xaxis: {title: 'Period', gridcolor: '#e5e7eb'},
+    yaxis: {title: 'Bankruptcies', gridcolor: '#e5e7eb'},
+    yaxis2: {title: 'Fire Sale Survivors', overlaying: 'y', side: 'right', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+
+  /* Chart 2: Balance sheet */
+  Plotly.newPlot('chart-balance', [
+    {x: t, y: data.equity, name: 'Equity', mode: 'lines', line: {color: COLORS.equity, width: 2}},
+    {x: t, y: data.liquidity, name: 'Liquidity', mode: 'lines', line: {color: COLORS.liquidity, width: 2}},
+    {x: t, y: data.loans, name: 'Loans', mode: 'lines', line: {color: COLORS.loans, width: 2}},
+  ], mkLayout('', {
+    xaxis: {title: 'Period', gridcolor: '#e5e7eb'},
+    yaxis: {title: 'Amount', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.18, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+
+  /* Chart 3: Bailout activity */
+  var bailoutTraces = [
+    {x: t, y: data.bailout_bill, name: 'Bailout Bill', type: 'bar', marker: {color: COLORS.bailout, opacity: 0.6}, yaxis: 'y'},
+    {x: t, y: data.bailout_count, name: 'Bailout Count', mode: 'lines+markers', line: {color: COLORS.shock, width: 2}, marker: {size: 4}, yaxis: 'y2'},
+  ];
+
+  var bailoutLayout = {
+    xaxis: {title: 'Period', gridcolor: '#e5e7eb'},
+    yaxis: {title: 'Bailout Bill', gridcolor: '#e5e7eb'},
+    yaxis2: {title: 'Count', overlaying: 'y', side: 'right', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.18, x: 0.5, xanchor: 'center'},
+  };
+
+  if (data.fund_balance) {
+    bailoutTraces.push({
+      x: t, y: data.fund_balance, name: 'Fund Balance',
+      mode: 'lines', line: {color: COLORS.fund, width: 2},
+    });
+  }
+  if (data.fund_depleted_events) {
+    var depletionX = [], depletionY = [];
+    data.fund_depleted_events.forEach(function(v, i) {
+      if (v > 0) { depletionX.push(t[i]); depletionY.push(v); }
+    });
+    if (depletionX.length > 0) {
+      bailoutTraces.push({
+        x: depletionX, y: depletionY, name: 'Fund Depletion',
+        mode: 'markers', marker: {color: '#dc2626', size: 10, symbol: 'x'},
+      });
+    }
+  }
+
+  Plotly.newPlot('chart-bailout', bailoutTraces, mkLayout('', bailoutLayout), PLOT_CFG);
+
+  /* Network tab */
+  if (data.network) {
+    document.getElementById('network-placeholder').classList.add('hidden');
+    document.getElementById('network-content').classList.remove('hidden');
+    document.getElementById('network-img').src = 'data:image/png;base64,' + data.network;
+  }
+
+  /* Bank table */
+  if (data.banks) {
+    renderBankTable(data.banks);
+  }
+}
+
+function renderBankTable(banks) {
+  var cols = ['ID', 'Equity', 'Assets', 'b_j', 'p_j', 'Fitness', 'Lender', 'Borrowers'];
+  var html = '<thead><tr>';
+  cols.forEach(function(c) { html += '<th data-col="' + c + '">' + c + '</th>'; });
+  html += '</tr></thead><tbody>';
+
+  banks.forEach(function(b) {
+    html += '<tr>';
+    html += '<td>' + b.id + '</td>';
+    html += '<td>' + (typeof b.E === 'number' ? b.E.toFixed(2) : b.E) + '</td>';
+    html += '<td>' + (typeof b.A === 'number' ? b.A.toFixed(2) : b.A) + '</td>';
+    html += '<td>' + (typeof b.b_j === 'number' ? b.b_j.toFixed(4) : (b.b_j || '')) + '</td>';
+    html += '<td>' + (typeof b.p_j === 'number' ? b.p_j.toFixed(4) : (b.p_j || '')) + '</td>';
+    html += '<td>' + (typeof b.fitness === 'number' ? b.fitness.toFixed(4) : (b.fitness || '')) + '</td>';
+    html += '<td>' + (b.lender !== undefined && b.lender !== null ? b.lender : '') + '</td>';
+    html += '<td>' + (b.num_borrowers !== undefined ? b.num_borrowers : '') + '</td>';
+    html += '</tr>';
+  });
+
+  html += '</tbody>';
+  var table = document.getElementById('bank-table');
+  table.innerHTML = html;
+
+  /* Sortable headers */
+  table.querySelectorAll('th').forEach(function(th, colIdx) {
+    th.addEventListener('click', function() {
+      sortTable(table, colIdx);
+    });
+  });
+}
+
+var sortState = {};
+function sortTable(table, colIdx) {
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  var asc = sortState[colIdx] !== true;
+  sortState[colIdx] = asc;
+
+  rows.sort(function(a, b) {
+    var aVal = a.cells[colIdx].textContent;
+    var bVal = b.cells[colIdx].textContent;
+    var aNum = parseFloat(aVal);
+    var bNum = parseFloat(bVal);
+    if (!isNaN(aNum) && !isNaN(bNum)) {
+      return asc ? aNum - bNum : bNum - aNum;
+    }
+    return asc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+  });
+
+  rows.forEach(function(row) { tbody.appendChild(row); });
+}
+
+/* ================================================================
+   PARAMETER SWEEP
+   ================================================================ */
+
+async function runSweep() {
+  var sweepParam = document.getElementById('sweep-param').value;
+  var from = parseFloat(document.getElementById('sweep-from').value);
+  var to = parseFloat(document.getElementById('sweep-to').value);
+  var step = parseFloat(document.getElementById('sweep-step').value);
+  var mcEnabled = document.getElementById('mc-enabled').checked;
+  var mcSeeds = parseInt(document.getElementById('mc-seeds').value) || 20;
+  var workers = parseInt(document.getElementById('workers').value) || 6;
+
+  var values = [];
+  for (var v = from; v <= to + step * 0.01; v += step) values.push(Math.round(v * 10000) / 10000);
+
+  /* Merge decomposition metrics + user-selected metrics */
+  var decompMetrics = ['bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay','bankruptcies_contagion','bankruptcies_fiscal','fire_sale_survivors'];
+  var selectedMetrics = getSelectedMetrics();
+  var allMetrics = decompMetrics.slice();
+  selectedMetrics.forEach(function(m) { if (allMetrics.indexOf(m) === -1) allMetrics.push(m); });
+
+  var cfg = collectConfig();
+  var totalRuns = mcEnabled ? values.length * mcSeeds : values.length;
+  setStatus('Running ' + totalRuns + ' simulations...', false);
+
+  var resp = await fetch('/api/sweep', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      sweep_param: sweepParam, sweep_values: values, config: cfg,
+      metrics: allMetrics, mc_enabled: mcEnabled, mc_seeds: mcSeeds, workers: workers,
+    }),
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+
+  var results = await readStreamedResponse(resp);
+
+  if (results) {
+    renderSweepTotalChart(results, sweepParam, selectedMetrics);
+    renderSweepDecomp(results, sweepParam);
+    buildSweepTable(results, sweepParam, allMetrics);
+    lastSweepData = {data: results, sweepParam: sweepParam, mcEnabled: mcEnabled, selectedMetrics: selectedMetrics, allMetrics: allMetrics};
+    document.getElementById('btn-save').style.display = '';
+    setProgress(100);
+    var label = mcEnabled ? values.length + ' values \u00d7 ' + mcSeeds + ' seeds' : values.length + ' runs';
+    setStatus('Done \u2014 ' + label, false);
+  }
+}
+
+/* Shared streaming response reader */
+async function readStreamedResponse(resp) {
+  var reader = resp.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = '';
+  var results = null;
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, {stream: true});
+    var lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      try {
+        var msg = JSON.parse(line);
+        if (msg.type === 'progress') {
+          setProgress(Math.round(msg.done / msg.total * 100));
+          setStatus(msg.status + ' (' + msg.done + '/' + msg.total + ')', false);
+        } else if (msg.type === 'result') { results = msg; }
+        else if (msg.type === 'error') { throw new Error(msg.message); }
+      } catch (e) { if (e.message && e.message.indexOf('Unexpected') === -1) throw e; }
+    }
+  }
+  return results;
+}
+
+/* ── Total line chart (like gui_sweep.py's plotResults) ── */
+function renderSweepTotalChart(data, sweepParam, selectedMetrics) {
+  var xLabel = PARAM_LABELS[sweepParam] || sweepParam;
+  var isMC = data.mc === true;
+  var sv = data.sweep_values;
+  var vals = data.values;
+
+  if (!selectedMetrics || selectedMetrics.length === 0) {
+    document.getElementById('chart-sweep-total').innerHTML = '<div class="placeholder">Select metrics above to plot</div>';
+    return;
+  }
+
+  document.getElementById('sweep-total-title').textContent = 'Selected Metrics by ' + xLabel + (isMC ? ' (MC ' + (data.mc_seeds||'') + ' seeds)' : '');
+
+  var traces = [];
+  var yAxes = {};
+  var axisNum = 0;
+
+  selectedMetrics.forEach(function(key, idx) {
+    var mInfo = OUTPUT_METRICS[key] || {label: key, color: '#888'};
+    var color = LINE_COLORS[idx % LINE_COLORS.length];
+    axisNum++;
+    var yAxisName = axisNum === 1 ? 'y' : 'y' + axisNum;
+
+    if (isMC && vals[0] && vals[0][key] && typeof vals[0][key] === 'object') {
+      var means = vals.map(function(r) { return r[key] ? r[key].mean : 0; });
+      var stds = vals.map(function(r) { return r[key] ? r[key].std : 0; });
+      var upper = means.map(function(m, j) { return m + stds[j]; });
+      var lower = means.map(function(m, j) { return m - stds[j]; });
+      traces.push({x: sv, y: upper, mode: 'lines', line: {width: 0}, showlegend: false, yaxis: yAxisName, hoverinfo: 'skip'});
+      traces.push({x: sv, y: lower, mode: 'lines', line: {width: 0}, fill: 'tonexty', fillcolor: hexToRgba(color, 0.15), showlegend: false, yaxis: yAxisName, hoverinfo: 'skip'});
+      traces.push({x: sv, y: means, name: mInfo.label + ' (mean)', type: 'scatter', mode: 'lines+markers', yaxis: yAxisName, line: {width: 2, color: color}, marker: {size: 6, color: color}});
+    } else {
+      var yVals = vals.map(function(r) { return r[key] !== undefined ? r[key] : 0; });
+      traces.push({x: sv, y: yVals, name: mInfo.label, type: 'scatter', mode: 'lines+markers', yaxis: yAxisName, line: {width: 2, color: color}, marker: {size: 6, color: color}});
+    }
+
+    var side = (axisNum % 2 === 1) ? 'left' : 'right';
+    yAxes['yaxis' + (axisNum === 1 ? '' : axisNum)] = {
+      title: mInfo.label, side: side, overlaying: axisNum > 1 ? 'y' : undefined,
+      showgrid: axisNum === 1, gridcolor: '#e5e7eb',
+    };
+  });
+
+  var layout = Object.assign({}, LAYOUT_BASE, {
+    title: {text: '', font: {size: 13}},
+    xaxis: {title: xLabel, gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+    margin: {l: 60, r: 60, t: 30, b: 70},
+  }, yAxes);
+
+  Plotly.newPlot('chart-sweep-total', traces, layout, PLOT_CFG);
+}
+
+/* ── Stacked bar decomposition chart ── */
+function renderSweepDecomp(data, sweepParam) {
+  document.getElementById('sweep-placeholder').classList.add('hidden');
+  document.getElementById('sweep-charts').classList.remove('hidden');
+
+  var xLabel = PARAM_LABELS[sweepParam] || sweepParam;
+  var isMC = data.mc === true;
+  var sv = data.sweep_values;
+  var vals = data.values;
+
+  document.getElementById('sweep-chart-title').textContent = 'Bankruptcy Decomposition by ' + xLabel;
+  document.getElementById('sweep-contagion-title').textContent = 'Contagion & Zombies by ' + xLabel;
+
+  var channels = ['bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay','bankruptcies_contagion','bankruptcies_fiscal'];
+  var channelLabels = ['Shock','Rationing','Repayment','Contagion','Fiscal'];
+  var channelColors = [COLORS.shock, COLORS.rationing, COLORS.repay, COLORS.contagion, COLORS.fiscal];
+
+  var barTraces = [];
+  channels.forEach(function(ch, ci) {
+    var yV = vals.map(function(r) { return isMC ? (r[ch] ? r[ch].mean : 0) : (r[ch] || 0); });
+    barTraces.push({x: sv.map(String), y: yV, name: channelLabels[ci], type: 'bar', marker: {color: channelColors[ci]}});
+  });
+
+  var totalVals = vals.map(function(r) { var s=0; channels.forEach(function(ch) { s += isMC ? (r[ch]?r[ch].mean:0) : (r[ch]||0); }); return s; });
+  barTraces.push({x: sv.map(String), y: totalVals, name: 'Total', type: 'scatter', mode: 'lines+markers', line: {color: COLORS.total, width: 2.5}, marker: {size: 6}});
+
+  var zombieVals = vals.map(function(r) { return isMC ? (r.fire_sale_survivors?r.fire_sale_survivors.mean:0) : (r.fire_sale_survivors||0); });
+  barTraces.push({x: sv.map(String), y: zombieVals, name: 'Fire Sale Survivors', type: 'scatter', mode: 'lines+markers', line: {color: COLORS.zombies, width: 2, dash: 'dash'}, marker: {size: 5}, yaxis: 'y2'});
+
+  Plotly.newPlot('chart-sweep-decomp', barTraces, mkLayout('', {
+    barmode: 'stack', xaxis: {title: xLabel, type: 'category'},
+    yaxis: {title: 'Bankruptcies', gridcolor: '#e5e7eb'},
+    yaxis2: {title: 'Fire Sale Survivors', overlaying: 'y', side: 'right', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.18, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+
+  var contagionVals = vals.map(function(r) { return isMC ? (r.bankruptcies_contagion?r.bankruptcies_contagion.mean:0) : (r.bankruptcies_contagion||0); });
+  Plotly.newPlot('chart-sweep-contagion', [
+    {x: sv.map(String), y: contagionVals, name: 'Contagion Deaths', mode: 'lines+markers', line: {color: COLORS.contagion, width: 2.5}, marker: {size: 7}},
+    {x: sv.map(String), y: zombieVals, name: 'Fire Sale Survivors', mode: 'lines+markers', line: {color: COLORS.zombies, width: 2.5}, marker: {size: 7}, yaxis: 'y2'},
+  ], mkLayout('', {
+    xaxis: {title: xLabel, type: 'category'},
+    yaxis: {title: 'Contagion Deaths', gridcolor: '#e5e7eb', titlefont: {color: COLORS.contagion}},
+    yaxis2: {title: 'Fire Sale Survivors', overlaying: 'y', side: 'right', gridcolor: '#e5e7eb', titlefont: {color: COLORS.zombies}},
+    legend: {orientation: 'h', y: -0.18, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+}
+
+function buildSweepTable(data, sweepParam, allMetrics) {
+  var table = document.getElementById('sweep-table');
+  var xLabel = PARAM_LABELS[sweepParam] || sweepParam;
+  var isMC = data.mc === true;
+  var labels = allMetrics.map(function(m) { return OUTPUT_METRICS[m] ? OUTPUT_METRICS[m].label : m; });
+
+  var html = '<thead><tr><th rowspan="' + (isMC ? 2 : 1) + '">' + xLabel + '</th>';
+  if (isMC) {
+    labels.forEach(function(l) { html += '<th colspan="4">' + l + '</th>'; });
+    html += '</tr><tr>';
+    labels.forEach(function() { html += '<th>Mean</th><th>Std</th><th>Min</th><th>Max</th>'; });
+  } else {
+    labels.forEach(function(l) { html += '<th>' + l + '</th>'; });
+  }
+  html += '</tr></thead><tbody>';
+  data.sweep_values.forEach(function(sv, i) {
+    html += '<tr><td>' + sv + '</td>';
+    allMetrics.forEach(function(m) {
+      var r = data.values[i];
+      if (isMC) {
+        var v = r[m] || {mean:0,std:0,min:0,max:0};
+        if (typeof v === 'object') html += '<td>' + v.mean.toFixed(1) + '</td><td>' + v.std.toFixed(1) + '</td><td>' + v.min.toFixed(0) + '</td><td>' + v.max.toFixed(0) + '</td>';
+        else html += '<td>' + v + '</td><td>-</td><td>-</td><td>-</td>';
+      } else {
+        html += '<td>' + (r[m] !== undefined ? (typeof r[m]==='number' ? r[m].toFixed(1) : r[m]) : 0) + '</td>';
+      }
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+/* ================================================================
+   REGIME COMPARISON (sweep overlay)
+   ================================================================ */
+
+async function runCompare() {
+  var regimes = [];
+  document.querySelectorAll('.regime-cb:checked').forEach(function(cb) { regimes.push(cb.value); });
+  if (regimes.length === 0) { setStatus('Select at least one regime', true); return; }
+
+  var sweepParam = document.getElementById('compare-sweep-param').value;
+  var from = parseFloat(document.getElementById('compare-from').value);
+  var to = parseFloat(document.getElementById('compare-to').value);
+  var step = parseFloat(document.getElementById('compare-step').value);
+  var workers = parseInt(document.getElementById('workers').value) || 6;
+
+  var values = [];
+  for (var v = from; v <= to + step * 0.01; v += step) values.push(Math.round(v * 10000) / 10000);
+
+  var cfg = collectConfig();
+  var metrics = ['bankruptcy','bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay','bankruptcies_contagion','bankruptcies_fiscal','fire_sale_survivors','tax_induced_failures'];
+  var totalRuns = values.length * regimes.length;
+  setStatus('Running ' + totalRuns + ' simulations across ' + regimes.length + ' regimes...', false);
+
+  var allRegimeResults = {};
+  var doneAccum = 0;
+
+  for (var ri = 0; ri < regimes.length; ri++) {
+    var regime = regimes[ri];
+    var regimeCfg = Object.assign({}, cfg);
+    regimeCfg.fiscal_regime = regime;
+
+    var resp = await fetch('/api/sweep', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        sweep_param: sweepParam, sweep_values: values, config: regimeCfg,
+        metrics: metrics, mc_enabled: false, workers: workers,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+
+    /* Read streamed response manually to track cross-regime progress */
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var result = null;
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, {stream: true});
+      var lines = buffer.split('\n'); buffer = lines.pop();
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li].trim(); if (!line) continue;
+        try {
+          var msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            doneAccum++;
+            setProgress(Math.round(doneAccum / totalRuns * 100));
+            setStatus(regime + ': ' + msg.status + ' (' + doneAccum + '/' + totalRuns + ')', false);
+          } else if (msg.type === 'result') { result = msg; }
+        } catch(e) { if (e.message && e.message.indexOf('Unexpected') === -1) throw e; }
+      }
+    }
+    if (result) allRegimeResults[regime] = result;
+  }
+
+  renderComparisonSweep(allRegimeResults, regimes, sweepParam, values);
+  /* Also run single-point comparison for the bar chart */
+  try {
+    var compareResp = await fetch('/api/compare', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({config: cfg, regimes: regimes}),
+    });
+    var compareData = await compareResp.json();
+    if (!compareData.error) renderComparisonBars(compareData, regimes);
+  } catch(e) { console.warn('Single-point comparison failed:', e); }
+
+  lastCompareData = {allRegimeResults: allRegimeResults, regimes: regimes, sweepParam: sweepParam, values: values};
+  document.getElementById('btn-save').style.display = '';
+  setProgress(100);
+  setStatus('Done \u2014 ' + totalRuns + ' simulations across ' + regimes.length + ' regimes', false);
+}
+
+function renderComparisonSweep(allResults, regimes, sweepParam, sweepValues) {
+  document.getElementById('compare-placeholder').classList.add('hidden');
+  document.getElementById('compare-charts').classList.remove('hidden');
+
+  var xLabel = PARAM_LABELS[sweepParam] || sweepParam;
+  var regimeLabels = {none: 'No fiscal cost', socialized_tax: 'Socialized tax', resolution_fund: 'Resolution fund'};
+  var regimeColors = {none: '#2563eb', socialized_tax: '#7c3aed', resolution_fund: '#059669'};
+  var regimeDash = {none: 'solid', socialized_tax: 'dash', resolution_fund: 'dot'};
+
+  document.getElementById('compare-sweep-title').textContent = 'Total Bankruptcies by ' + xLabel + ' \u2014 Regime Overlay';
+
+  var traces = [];
+  regimes.forEach(function(regime) {
+    var data = allResults[regime];
+    if (!data) return;
+    var yVals = data.values.map(function(r) { return r.bankruptcy || 0; });
+    traces.push({
+      x: sweepValues, y: yVals, name: regimeLabels[regime] || regime,
+      mode: 'lines+markers', line: {color: regimeColors[regime] || '#888', width: 2.5, dash: regimeDash[regime] || 'solid'},
+      marker: {size: 7, color: regimeColors[regime] || '#888'},
+    });
+  });
+
+  Plotly.newPlot('chart-compare-sweep', traces, mkLayout('', {
+    xaxis: {title: xLabel, gridcolor: '#e5e7eb'},
+    yaxis: {title: 'Total Bankruptcies', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+
+  /* Comparison table: sweep data */
+  var table = document.getElementById('compare-table');
+  var html = '<thead><tr><th>' + xLabel + '</th>';
+  regimes.forEach(function(r) { html += '<th>' + (regimeLabels[r]||r) + '</th>'; });
+  html += '</tr></thead><tbody>';
+  sweepValues.forEach(function(sv, i) {
+    html += '<tr><td>' + sv + '</td>';
+    regimes.forEach(function(r) {
+      var val = allResults[r] && allResults[r].values[i] ? allResults[r].values[i].bankruptcy || 0 : 0;
+      html += '<td>' + (typeof val === 'number' ? val.toFixed(0) : val) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+function renderComparisonBars(data, regimes) {
+  var rd = data.regimes || data;
+  var metrics = ['bankruptcy','bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay','bankruptcies_contagion','bankruptcies_fiscal','fire_sale_survivors'];
+  var metricLabels = ['Total','Shock','Rationing','Repayment','Contagion','Fiscal','Zombies'];
+  var regimeLabels = {none: 'No fiscal cost', socialized_tax: 'Socialized tax', resolution_fund: 'Resolution fund'};
+  var regimeColors = {none: '#2563eb', socialized_tax: '#7c3aed', resolution_fund: '#059669'};
+
+  var traces = regimes.map(function(regime) {
+    var yVals = metrics.map(function(m) { return rd[regime] ? (rd[regime][m]||0) : 0; });
+    return {x: metricLabels, y: yVals, name: regimeLabels[regime]||regime, type: 'bar', marker: {color: regimeColors[regime]||'#888'}};
+  });
+
+  Plotly.newPlot('chart-compare-bars', traces, mkLayout('', {
+    barmode: 'group', xaxis: {title: '', type: 'category'},
+    yaxis: {title: 'Count', gridcolor: '#e5e7eb'},
+    legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+  }), PLOT_CFG);
+}
+
+/* ================================================================
+   PRESETS
+   ================================================================ */
+
+function applyPreset(name) {
+  if (name === 'rho_sweep_no_eta') {
+    setRadio('mode', 'sweep'); switchMode('sweep');
+    document.getElementById('sweep-param').value = 'rho'; onSweepParamChange();
+    document.getElementById('sweep-from').value = '0';
+    document.getElementById('sweep-to').value = '0.95';
+    document.getElementById('sweep-step').value = '0.1';
+    document.getElementById('p-eta_bailout').value = '0';
+    document.getElementById('p-fiscal_regime').value = 'none'; toggleFiscalParams();
+  } else if (name === 'eta_sweep_notax') {
+    setRadio('mode', 'sweep'); switchMode('sweep');
+    document.getElementById('sweep-param').value = 'eta_bailout'; onSweepParamChange();
+    document.getElementById('sweep-from').value = '0';
+    document.getElementById('sweep-to').value = '0.95';
+    document.getElementById('sweep-step').value = '0.1';
+    document.getElementById('p-rho').value = '0.4';
+    document.getElementById('p-fiscal_regime').value = 'none'; toggleFiscalParams();
+  } else if (name === 'eta_sweep_tax') {
+    setRadio('mode', 'sweep'); switchMode('sweep');
+    document.getElementById('sweep-param').value = 'eta_bailout'; onSweepParamChange();
+    document.getElementById('sweep-from').value = '0';
+    document.getElementById('sweep-to').value = '0.95';
+    document.getElementById('sweep-step').value = '0.1';
+    document.getElementById('p-rho').value = '0.4';
+    document.getElementById('p-fiscal_regime').value = 'socialized_tax'; toggleFiscalParams();
+  } else if (name === 'eta_sweep_fund') {
+    setRadio('mode', 'sweep'); switchMode('sweep');
+    document.getElementById('sweep-param').value = 'eta_bailout'; onSweepParamChange();
+    document.getElementById('sweep-from').value = '0';
+    document.getElementById('sweep-to').value = '0.95';
+    document.getElementById('sweep-step').value = '0.1';
+    document.getElementById('p-rho').value = '0.4';
+    document.getElementById('p-fiscal_regime').value = 'resolution_fund'; toggleFiscalParams();
+  } else if (name === 'regime_compare') {
+    setRadio('mode', 'compare'); switchMode('compare');
+    document.getElementById('p-rho').value = '0.4';
+    document.getElementById('p-eta_bailout').value = '0.5';
+    document.querySelectorAll('.regime-cb').forEach(function(cb) { cb.checked = true; });
+  }
+  switchTab('decomposition');
+}
+
+function setRadio(name, value) {
+  document.querySelectorAll('input[name="' + name + '"]').forEach(function(r) { r.checked = (r.value === value); });
+}
+
+/* ================================================================
+   SAVE RESULTS
+   ================================================================ */
+
+async function saveResults() {
+  if (!lastSweepData && !lastCompareData) { alert('No results to save.'); return; }
+  var name = prompt('Enter a name for the export files:');
+  if (!name) return;
+
+  var btn = document.getElementById('btn-save');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  var csv = '', pngB64 = '';
+
+  try {
+    if (currentMode === 'sweep' && lastSweepData) {
+      var sd = lastSweepData;
+      var isMC = sd.data.mc === true;
+      var xLabel = PARAM_LABELS[sd.sweepParam] || sd.sweepParam;
+      var metricsToSave = sd.allMetrics || sd.selectedMetrics || [];
+      var rows = [];
+      var hdr = [xLabel];
+      metricsToSave.forEach(function(m) {
+        var label = OUTPUT_METRICS[m] ? OUTPUT_METRICS[m].label : m;
+        if (isMC) { hdr.push(label+'_mean', label+'_std', label+'_min', label+'_max'); }
+        else { hdr.push(label); }
+      });
+      rows.push(hdr.join(','));
+      sd.data.sweep_values.forEach(function(sv, i) {
+        var row = [sv];
+        metricsToSave.forEach(function(m) {
+          if (isMC) {
+            var a = sd.data.values[i][m] || {mean:0,std:0,min:0,max:0};
+            if (typeof a === 'object') row.push(a.mean, a.std, a.min, a.max);
+            else row.push(a, 0, a, a);
+          } else { row.push(sd.data.values[i][m] !== undefined ? sd.data.values[i][m] : 0); }
+        });
+        rows.push(row.join(','));
+      });
+      csv = rows.join('\n');
+      try { var img = await Plotly.toImage('chart-sweep-total', {format:'png',width:1200,height:600}); pngB64 = img.split(',')[1]; } catch(e) {}
+
+    } else if (currentMode === 'compare' && lastCompareData) {
+      var cd = lastCompareData;
+      var regimeLabels = {none:'No fiscal cost', socialized_tax:'Socialized tax', resolution_fund:'Resolution fund'};
+      var xL = PARAM_LABELS[cd.sweepParam] || cd.sweepParam;
+      var rows2 = [xL + ',' + cd.regimes.map(function(r){return regimeLabels[r]||r;}).join(',')];
+      cd.values.forEach(function(sv, i) {
+        var row = [sv];
+        cd.regimes.forEach(function(r) {
+          var val = cd.allRegimeResults[r] && cd.allRegimeResults[r].values[i] ? cd.allRegimeResults[r].values[i].bankruptcy||0 : 0;
+          row.push(Math.round(val));
+        });
+        rows2.push(row.join(','));
+      });
+      csv = rows2.join('\n');
+      try { var img2 = await Plotly.toImage('chart-compare-sweep', {format:'png',width:1200,height:600}); pngB64 = img2.split(',')[1]; } catch(e) {}
+    }
+
+    var resp = await fetch('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, png: pngB64, csv: csv}),
+    });
+    var result = await resp.json();
+    if (result.ok) {
+      btn.textContent = 'Saved!';
+      setTimeout(function() { btn.textContent = 'Save Results'; btn.disabled = false; }, 2000);
+    } else { throw new Error(result.error); }
+  } catch(e) {
+    alert('Save failed: ' + e.message);
+    btn.textContent = 'Save Results'; btn.disabled = false;
+  }
+}
+
+/* ================================================================
+   INIT
+   ================================================================ */
+
+switchMode('single');
+toggleFiscalParams();
+switchTab('decomposition');
+</script>
+</body>
+</html>

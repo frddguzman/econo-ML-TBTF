@@ -1,33 +1,47 @@
-.ipynb_checkpoints/
+# Python
 __pycache__/
-alessio/
-old/
-quarto/interbank_files/
-logs/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Claude Code
+.claude/
+
+# Runtime output
 output/*
-models/td3.zip
+logs/
 lenders/*
 ppo/*
-tommaso/*
-.idea/*
-*.txt
-Econometrics-With-Python/
-*~
-graph_tests/*
-gab.py
-gab.c
-doc/README.aux
-doc/README.out 
-doc/README.log
-doc/README.md
-texput.log
+out/*
+
+# Models (large binaries)
+models/td3.zip
+
+# Tests artifacts
 tests/*.gdt
 tests/tests/
 tests/output/
+
+# LaTeX build artifacts
 doc/*.log
 doc/*.aux
+doc/*.out
+texput.log
+
+# Misc
+gab.py
+gab.c
+graph_tests/*
 auxil/*
-out/*
-.venv/
-.claude/
-*.pyc
+*.txt

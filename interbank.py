@@ -64,23 +64,28 @@ class Config:
     mu: float = 0.7  # mi µ
     omega: float = 0.6  # omega ω
 
-
     # Lender's change mechanism
     lender_change: lc.LenderChange = None
 
-    # screening costs (eqs. 3–5)
-    phi: float = 0.025  # phi Φ (legacy, unused by new spec)
-    chi: float = 0.015  # chi Χ (legacy, unused by new spec)
-    sigma_min: float = 0.025  # σ_min: baseline lender operational cost (eq. 3)
-    delta_min: float = 0.015  # δ_min: baseline borrower transparency (eq. 4)
-    gamma_screening: float = 0.01  # γ: universal institutional maturity rate (eqs. 3–4)
+    # screening costs
+    phi: float = 0.025  # phi Φ
+    chi: float = 0.015  # chi Χ
 
-    xi: float = 0.3  # xi ξ liquidation cost of collateral (legacy)
-    alpha_recovery: float = 0.3  # α: collateral recovery rate in liquidation (eq. 8)
+    xi: float = 0.3  # xi ξ liquidation cost of collateral
     rho: float = 0.3  # rho ρ fire sale cost
 
     beta: float = 5  # β beta intensity of breaking the connection (5)
     alfa: float = 0.1  # α alfa below this level of E or D, we will bankrupt the bank
+
+    # TBTF / Bailout parameters (eqs. 2–9 of alternativa.tex)
+    gamma_capital: float = 0.08    # γ capital adequacy fraction (IRB constraint)
+    eta_bailout: float = 0.85      # η bailout recovery fraction (exogenous policy)
+    alpha_collateral: float = 0.05 # α collateral recovery rate, no-bailout state (α ≪ η)
+
+    # Fiscal regime: "socialized_tax" (default), "none", "resolution_fund"
+    fiscal_regime: str = "socialized_tax"
+    fund_levy_rate: float = 0.005    # τ_fund: periodic levy rate on assets (resolution_fund regime)
+    fund_initial_balance: float = 0.0  # starting resolution fund balance
 
     # If true, psi variable will be ignored:
     psi_endogenous = False
@@ -144,7 +149,7 @@ class Config:
     def __iter__(self):
         for attr in dir(self):
             value = getattr(self, attr)
-            if isinstance(value, int) or isinstance(value, float) or isinstance(value, bool):
+            if isinstance(value, (int, float, bool, str)):
                 yield attr, value
 
     def get_current_value(self, name_config):
@@ -164,6 +169,8 @@ class Config:
                 return 0
             elif current_value is bool:
                 return False
+            elif current_value is str:
+                return ""
             else:
                 return 0.0
         return current_value
@@ -198,6 +205,8 @@ class Config:
                             setattr(self, name_config, int(value_config))
                         elif isinstance(current_value, float):
                             setattr(self, name_config, float(value_config))
+                        elif isinstance(current_value, str):
+                            setattr(self, name_config, value_config)
                         else:
                             setattr(self, name_config, float(value_config))
                     except ValueError:
@@ -301,6 +310,23 @@ class Statistics:
         self.communities = np.zeros(self.model.config.T, dtype=int)
         self.communities_not_alone = np.zeros(self.model.config.T, dtype=int)
         self.gcs = np.zeros(self.model.config.T, dtype=int)
+        # TBTF bailout statistics
+        self.bailout_bill = np.zeros(self.model.config.T, dtype=float)
+        self.bailout_count = np.zeros(self.model.config.T, dtype=int)
+        self.bailout_tax_total = np.zeros(self.model.config.T, dtype=float)
+        self.tax_induced_failures = np.zeros(self.model.config.T, dtype=int)
+        self.cascade_failures = np.zeros(self.model.config.T, dtype=int)
+        # Bankruptcy decomposition by cause
+        self.bankruptcies_shock = np.zeros(self.model.config.T, dtype=int)
+        self.bankruptcies_rationing = np.zeros(self.model.config.T, dtype=int)
+        self.bankruptcies_repay = np.zeros(self.model.config.T, dtype=int)
+        self.bankruptcies_contagion = np.zeros(self.model.config.T, dtype=int)
+        self.bankruptcies_fiscal = np.zeros(self.model.config.T, dtype=int)
+        self.fire_sale_survivors = np.zeros(self.model.config.T, dtype=int)
+        # Resolution fund statistics (all regimes — stays zeros when not active)
+        self.resolution_fund_balance = np.zeros(self.model.config.T, dtype=float)
+        self.fund_depleted_events = np.zeros(self.model.config.T, dtype=int)
+        self.total_levy_collected = np.zeros(self.model.config.T, dtype=float)
         self.detailed_banks_results = pd.DataFrame()
         if self.statistics_stats_market:
             self.statistics_stats_market.reset()
@@ -1169,6 +1195,9 @@ class Model:
     save_graphs_results = []
     log = None
     maxE = Config.E_i0
+    period_bailout_bill = 0.0  # accumulated bailout cost, reset each period
+    max_A_lagged = 0.0         # max lagged assets, computed start of period
+    resolution_fund_balance = 0.0  # pre-funded resolution fund (resolution_fund regime)
     statistics = None
     statistics_market = None
     config = None
@@ -1224,6 +1253,7 @@ class Model:
         self.save_graphs = save_graphs_instants
         self.banks = []
         self.t = 0
+        self.resolution_fund_balance = self.config.fund_initial_balance
         if not self.config.lender_change:
             self.config.lender_change = lc.determine_algorithm()
         self.policy_changes = 0
@@ -1254,6 +1284,10 @@ class Model:
         self.statistics.compute_leverage()
         self.do_shock('shock2')
         self.do_repayments()
+        if self.config.fiscal_regime == "socialized_tax":
+            self.apply_bailout_tax()
+        elif self.config.fiscal_regime == "resolution_fund":
+            self.collect_fund_levy()
         self.log.debug_banks()
         if self.log.progress_bar:
             self.log.progress_bar.next()
@@ -1273,6 +1307,9 @@ class Model:
             filename = self.statistics.get_graph(self.t)
             if filename:
                 self.save_graphs_results.append(filename)
+        # Update lagged assets for next period's b_j computation (eq. 3)
+        for bank in self.banks:
+            bank.A_lagged = bank.A
         self.t += 1
 
     def backward(self):
@@ -1495,26 +1532,33 @@ class Model:
                                        if lender is None else
                                        f"rationing={rationing_of_bank} as lender {lender.get_id(short=True)} "
                                        f"has no money", 'loans')
-                elif demand > lender.s:
-                    rationing_of_bank = demand - lender.s
-                    total_rationed += rationing_of_bank
-                    num_of_rationed += 1
-                    bank.do_fire_sales(rationing_of_bank,
-                                       f"lender.s={lender.s} but need d={demand}, rationing={rationing_of_bank}",
-                                       'loans')
-                    loan = lender.s if lender.s > 0 else 0
-                    bank.l = loan
-                    if loan > 0:
-                        lender.active_borrowers[bank_index] = loan
-                        lender.C -= loan
-                        lender.s = 0
-                    total_loans += loan
                 else:
-                    bank.l = demand
-                    lender.active_borrowers[bank_index] = demand
-                    lender.C -= demand
-                    lender.s -= demand
-                    total_loans += demand
+                    # eq. 6: IRB bilateral exposure cap
+                    L_ij_cap = lender.L_ij_max[bank.id] if hasattr(lender, 'L_ij_max') else float('inf')
+                    effective_supply = min(lender.s, L_ij_cap)
+
+                    if demand > effective_supply:
+                        rationing_of_bank = demand - effective_supply
+                        total_rationed += rationing_of_bank
+                        num_of_rationed += 1
+                        bank.do_fire_sales(rationing_of_bank,
+                                           f"effective_supply={effective_supply:.4f} (s={lender.s:.4f}, "
+                                           f"L_ij_cap={L_ij_cap:.4f}) but need d={demand}, "
+                                           f"rationing={rationing_of_bank}",
+                                           'loans')
+                        loan = effective_supply if effective_supply > 0 else 0
+                        bank.l = loan
+                        if loan > 0:
+                            lender.active_borrowers[bank_index] = loan
+                            lender.C -= loan
+                            lender.s -= loan
+                        total_loans += loan
+                    else:
+                        bank.l = demand
+                        lender.active_borrowers[bank_index] = demand
+                        lender.C -= demand
+                        lender.s -= demand
+                        total_loans += demand
             else:
                 bank.l = 0
                 if bank.active_borrowers:
@@ -1561,14 +1605,14 @@ class Model:
                     if not bank_lender.failed and (not bank.failed):
                         bank_lender.C += bank.paid_loan
                         bank_lender.E += bank.paid_profits
-                        del bank_lender.active_borrowers[bank.id]
+                        bank_lender.active_borrowers.pop(bank.id, None)
                 else:
                     bank.C -= loan_to_return
                     bank.paid_loan = bank.l
                     bank.paid_profits = loan_profits
                     bank_lender.C += bank.paid_loan
                     bank_lender.E += bank.paid_profits
-                    del bank_lender.active_borrowers[bank.id]
+                    bank_lender.active_borrowers.pop(bank.id, None)
                 bank_lender.s += bank.paid_loan
                 bank.E -= loan_profits
 
@@ -1580,6 +1624,9 @@ class Model:
                     total_profits_only_in_market += bank.paid_profits
                 if bank.E < 0:
                     bank.failed = True
+                    self.statistics.compute_another_bankruptcy(
+                        bank, f"repay: loan profits pushed E={bank.E:.4f}<0")
+                    self.statistics.bankruptcies_repay[self.t] += 1
                     self.log.debug('repay',
                                    '{} fails because the profits of the loan generates E<0'.format(bank.get_id()))
         for bank in self.banks:
@@ -1593,6 +1640,229 @@ class Model:
             # all loans are revised and cancelled, or banks have failed:
             bank.l = 0
         self.statistics.compute_profits(total_profits)
+
+
+    def apply_bailout_tax(self):
+        """
+        Synchronous bailout tax: τ_k = bill · (A_k / Σ A_m)
+        Tax is a cash obligation paid from C (liquidity). If C is insufficient,
+        the shortfall is routed through do_fire_sales() — exactly like deposit
+        shocks and loan repayments. Equity reduction is the accounting consequence.
+
+        IMPORTANT: period_bailout_bill is snapshot and zeroed BEFORE the loop.
+        Fire sales during tax application may trigger do_bankruptcy() which adds
+        new bailout costs to period_bailout_bill. Those are NOT taxed in this
+        round — they carry over to next period's tax cycle (or are handled by
+        the caller if it re-checks). This prevents infinite recursion while
+        ensuring no bailout cost is silently dropped.
+        """
+        if self.period_bailout_bill <= 0:
+            return
+
+        total_surviving_assets = sum(
+            bank.A for bank in self.banks if not bank.failed and bank.A > 0
+        )
+        if total_surviving_assets <= 0:
+            return
+
+        # Snapshot the bill and zero it BEFORE the loop so fire-sale-triggered
+        # bankruptcies accumulate fresh into period_bailout_bill without
+        # double-counting or being silently zeroed.
+        bill_this_round = self.period_bailout_bill
+        self.period_bailout_bill = 0.0
+
+        # Track for statistics
+        self.statistics.bailout_tax_total[self.t] = bill_this_round
+        tax_failures = 0
+
+        for bank in self.banks:
+            if not bank.failed and bank.A > 0:
+                tax_hit = bill_this_round * (bank.A / total_surviving_assets)
+
+                if bank.C >= tax_hit:
+                    # Bank has enough cash: pay cleanly
+                    bank.C -= tax_hit
+                    bank.E -= tax_hit  # accounting consequence, balance sheet identity holds
+                else:
+                    # Cash insufficient: pay what we can, fire-sell the rest
+                    shortfall = tax_hit - bank.C
+                    bank.E -= bank.C  # equity absorbs the cash portion
+                    bank.C = 0
+                    bank.do_fire_sales(shortfall, f"bailout tax shortfall={shortfall:.4f}", 'tax')
+
+                # Check failure AFTER fire sales (do_fire_sales may have already set bank.failed)
+                if not bank.failed and bank.E <= self.config.alfa:
+                    bank.failed = True
+                    tax_failures += 1
+                    self.statistics.compute_another_bankruptcy(
+                        bank, f"bailout tax: tax_hit={tax_hit:.4f}")
+                    self.statistics.bankruptcies_fiscal[self.t] += 1
+                    self.log.debug('tax',
+                        f'{bank.get_id()} failed from bailout tax: '
+                        f'tax={tax_hit:.4f}, E={bank.E:.4f}')
+                elif bank.failed:
+                    # do_fire_sales already triggered bankruptcy
+                    tax_failures += 1
+
+        self.statistics.tax_induced_failures[self.t] = tax_failures
+        self.log.debug('tax',
+            f'Bailout tax: bill={bill_this_round:.4f}, '
+            f'tax_failures={tax_failures}, '
+            f'cascade_bill={self.period_bailout_bill:.4f}')
+
+    def collect_fund_levy(self):
+        """
+        Resolution fund levy: each surviving bank pays τ_fund · A_k into the fund.
+
+        Structurally identical to apply_bailout_tax():
+        - Paid from cash C first
+        - Shortfall routed through do_fire_sales()
+        - Bankruptcy check after payment
+        - Only ACTUALLY COLLECTED amounts are credited to the fund
+
+        Runs at END of period, after all defaults are resolved.
+        Fund balance is available for bailouts in SUBSEQUENT periods,
+        creating a natural one-period lag with no circular dependency.
+        """
+        if self.config.fund_levy_rate <= 0 or self.config.eta_bailout <= 0:
+            return
+
+        levy_failures = 0
+        levy_collected = 0.0
+
+        for bank in self.banks:
+            if not bank.failed and bank.A > 0:
+                levy = self.config.fund_levy_rate * bank.A
+
+                if bank.C >= levy:
+                    # Bank has enough cash: pay cleanly
+                    bank.C -= levy
+                    bank.E -= levy
+                    levy_collected += levy
+                else:
+                    # Cash insufficient: pay what we can from cash, fire-sell the rest
+                    cash_portion = bank.C
+                    shortfall = levy - bank.C
+                    bank.E -= bank.C  # equity absorbs the cash portion
+                    bank.C = 0
+                    bank.do_fire_sales(shortfall, f"fund levy shortfall={shortfall:.4f}", 'levy')
+
+                    if bank.failed:
+                        # Bank died during fire sales — fund only gets the cash portion
+                        levy_collected += cash_portion
+                    else:
+                        # Fire sale succeeded — full levy paid
+                        levy_collected += levy
+
+                # Bankruptcy check after levy (same pattern as apply_bailout_tax)
+                if not bank.failed and bank.E <= self.config.alfa:
+                    bank.failed = True
+                    levy_failures += 1
+                    self.statistics.compute_another_bankruptcy(
+                        bank, f"fund levy: levy={levy:.4f}, E={bank.E:.4f}")
+                    self.statistics.bankruptcies_fiscal[self.t] += 1
+                    self.log.debug('levy',
+                        f'{bank.get_id()} failed from fund levy: '
+                        f'levy={levy:.4f}, E={bank.E:.4f}')
+                elif bank.failed:
+                    # do_fire_sales already triggered bankruptcy
+                    levy_failures += 1
+
+        self.resolution_fund_balance += levy_collected
+        self.statistics.total_levy_collected[self.t] = levy_collected
+        self.statistics.resolution_fund_balance[self.t] = self.resolution_fund_balance
+        self.statistics.tax_induced_failures[self.t] += levy_failures
+        self.log.debug('levy',
+            f'Fund levy: collected={levy_collected:.4f}, '
+            f'levy_failures={levy_failures}, '
+            f'fund_balance={self.resolution_fund_balance:.4f}')
+
+    def snapshot_loan_relationships(self):
+        """Capture each bank's loan amount and lender ID BEFORE repayments.
+
+        Called after do_loans() so that propagate_lender_failures() can
+        identify which borrowers depended on a lender that subsequently
+        fails during do_repayments() or apply_bailout_tax().
+        """
+        for bank in self.banks:
+            bank._snapshot_loan = bank.l
+            bank._snapshot_lender_id = bank.lender if bank.l > 0 else None
+
+    def propagate_lender_failures(self):
+        """Credit-gap cascade: when a lender fails, its borrowers face an
+        immediate liquidity shock.
+
+        Economic rationale
+        ------------------
+        The interbank loan from a failed lender represented temporary
+        liquidity support. With the lender gone the credit channel is
+        destroyed: the borrower's balance-sheet position that was sustained
+        by interbank access is now exposed. This creates a fire-sale
+        pressure equal to the loan the borrower received from the failed
+        lender — the same 'sudden stop' mechanism documented in the
+        theoretical banking literature (Diamond & Rajan 2005, Allen & Gale
+        2000).
+
+        Mechanically, the method:
+        1. Identifies every borrower that had a loan from a lender that
+           failed THIS period (using the pre-repayment snapshot).
+        2. Imposes a fire-sale shock on each orphaned borrower equal to
+           the loan it received from the failed lender.
+        3. Severs the lender link so the orphan enters next period with
+           lender = None → must find a new lender via Boltzmann →
+           potential rationing → further cascading.
+
+        Called after do_repayments() and apply_bailout_tax(), before
+        replace_bankrupted_banks().
+        """
+        # Collect IDs of banks that failed this period
+        failed_lender_ids = set()
+        for bank in self.banks:
+            if bank.failed:
+                failed_lender_ids.add(bank.id)
+
+        if not failed_lender_ids:
+            return
+
+        cascade_count = 0
+
+        for bank in self.banks:
+            if bank.failed:
+                continue
+            # Was this bank borrowing from a lender that just failed?
+            if (bank._snapshot_lender_id is not None
+                    and bank._snapshot_lender_id in failed_lender_ids
+                    and bank._snapshot_loan > 0):
+
+                gap = bank._snapshot_loan  # credit channel that just vanished
+
+                self.log.debug('cascade',
+                    f'{bank.get_id()} credit gap={gap:.4f} from '
+                    f'lender #{bank._snapshot_lender_id} failure')
+
+                # Fire-sell to cover the liquidity gap
+                bank.do_fire_sales(
+                    gap,
+                    f'credit-gap shock: lender #{bank._snapshot_lender_id} failed, '
+                    f'loan={gap:.4f} evaporated',
+                    'cascade')
+
+                if bank.failed:
+                    cascade_count += 1
+
+        # Sever ALL lender links to failed banks (affects next period's
+        # setup_links — orphaned borrowers must find new lenders via
+        # Boltzmann instead of silently inheriting the replacement bank)
+        for bank in self.banks:
+            if bank.lender is not None and bank.lender in failed_lender_ids:
+                self.log.debug('cascade',
+                    f'{bank.get_id()} lender link to #{bank.lender} severed')
+                bank.lender = None
+
+        self.statistics.cascade_failures[self.t] = cascade_count
+        if cascade_count > 0:
+            self.log.debug('cascade',
+                f'Credit-gap cascade: {cascade_count} additional failures')
 
 
     def replace_bankrupted_banks(self):
@@ -1637,6 +1907,10 @@ class Model:
                     del bank_i.active_borrowers[borrower]
 
     def initialize_step(self):
+        # NOTE: do NOT reset period_bailout_bill here — cascade costs from
+        # the previous period's apply_bailout_tax() fire-sale loop must carry
+        # over. Fresh bailouts from this period accumulate on top. The bill is
+        # managed by apply_bailout_tax() which snapshots and zeros before its loop.
         for bank in self.banks:
             bank.B = 0
             bank.rationing = 0
@@ -1645,102 +1919,102 @@ class Model:
             bank.active_borrowers = {}
             bank.asset_j_avg_ir = 0
             bank.asset_i_avg_ir = 0
-            bank.age += 1  # increment institutional age T_i each period
         if self.t == 0:
             self.log.debug_banks()
 
     def do_interest_rate_common_part(self):
         if len(self.banks) <= 1:
             return None
-        # E_max: recomputed each period (eq. 2)
+        # eq. 2: maxE for default probability
         self.maxE = max(self.banks, key=lambda k: k.E).E
         for bank in self.banks:
-            # p_j = 1 - E^j / E_max (eq. 2); prob_surviving = 1 - p_j = E^j / E_max
             if self.config.p_avg_ir:
                 bank.prob_surviving = self.config.p_avg_ir
             else:
-                bank.prob_surviving = bank.E / self.maxE if self.maxE > 0 else 0
+                bank.prob_surviving = bank.E / self.maxE
             bank.A = bank.C + bank.L + bank.R
-            # λ^j = A^j_LP / E^j  (eq. 10) — A_LP is illiquid assets (L)
-            bank.lambda_ = bank.L / bank.E if bank.E > 0 else 0
-        # λ_max: recomputed each period (eq. 10)
-        max_lambda = max(self.banks, key=lambda k: k.lambda_).lambda_
-        for bank in self.banks:
-            # h^j = λ^j / λ_max (eq. 10)
-            bank.h = bank.lambda_ / max_lambda if max_lambda > 0 else 0
-        # Compute loan sizes L^{i,j} = (1 - h^j) * A^j for each pair (eq. 10)
-        for bank in self.banks:
-            bank.c_avg_ir = []
-            for i in range(self.config.N):
-                # c_avg_ir[i] stores L^{bank,i} = (1 - h_i) * A_i (eq. 10)
-                c = 0 if i == bank.id else (1 - self.banks[i].h) * self.banks[i].A
-                bank.c_avg_ir.append(c)
-            if self.config.psi_endogenous:
-                bank.psi = bank.E / self.maxE
+        # eq. 3: max lagged assets for bailout probability
+        self.max_A_lagged = max((b.A_lagged for b in self.banks if not b.failed), default=1.0)
 
     def do_interest_rate(self):
         self.do_interest_rate_common_part()
+
+        gamma = self.config.gamma_capital
+        eta = self.config.eta_bailout
+        alpha = self.config.alpha_collateral
+
         for bank_i in self.banks:
+            bank_i.L_ij_max = [0.0] * self.config.N
+
             for j in range(self.config.N):
-                try:
-                    if j == bank_i.id:
-                        bank_i.rij[j] = 0
+                if j == bank_i.id:
+                    bank_i.rij[j] = 0
+                    continue
+
+                bank_j = self.banks[j]
+                # eq. 2: default probability of borrower j
+                p_j = 1 - bank_j.prob_surviving
+                # eq. 3: bailout probability (lagged assets)
+                b_j = bank_j.A_lagged / self.max_A_lagged if self.max_A_lagged > 0 else 0
+                E_i = bank_i.E
+                A_i = bank_i.A
+                A_j = bank_j.A_lagged  # collateral base from lagged assets
+                # BT 2017 bilateral screening cost
+                screening_cost = self.config.chi * A_i - self.config.phi * A_j
+
+                # Boundary cases (Table 1 of alternativa.tex)
+                if p_j <= 0:  # perfectly capitalized borrower
+                    L_ij = bank_i.C
+                    rij = screening_cost / L_ij if L_ij > 0 else np.inf
+
+                elif p_j >= 1.0:  # insolvent, priced out
+                    L_ij = 0
+                    rij = np.inf
+
+                elif (1 - b_j * eta) <= 0:  # degenerate bailout
+                    L_ij = 0
+                    rij = np.inf
+
+                else:
+                    # eq. 6: optimal loan supply, IRB capital constraint binding
+                    L_ij = min(
+                        (gamma * E_i + p_j * (1 - b_j) * alpha * A_j)
+                        / (p_j * (1 - b_j * eta)),
+                        bank_i.C
+                    )
+
+                    if L_ij <= 0:
+                        rij = np.inf
                     else:
-                        bank_j = self.banks[j]
-                        p_j = 1 - bank_j.prob_surviving  # p_j = 1 - E^j/E_max (eq. 2)
-                        L_ij = bank_i.c_avg_ir[j]        # L^{i,j} = (1-h^j)*A^j (eq. 10)
-                        if bank_j.prob_surviving == 0 or L_ij <= 0:
-                            bank_i.rij[j] = self.config.r_i0
-                        else:
-                            A_i = bank_i.A if not self.config.asset_i_avg_ir else self.config.asset_i_avg_ir
-                            A_j = bank_j.A if not self.config.asset_j_avg_ir else self.config.asset_j_avg_ir
-                            # K_{i,j} = σ(T_i)*A^i - δ(T_j)*A^j (eq. 5)
-                            sigma_i = self.config.sigma_min + self.config.gamma_screening * math.log(1 + bank_i.age)  # eq. 3
-                            delta_j = self.config.delta_min + self.config.gamma_screening * math.log(1 + bank_j.age)  # eq. 4
-                            K_ij = sigma_i * A_i - delta_j * A_j  # eq. 5
-                            # r^{i,j} = [K_{i,j} - p_j*(α*A^j - L^{i,j})] / [(1-p_j)*L^{i,j}] (eq. 9)
-                            numerator = K_ij - p_j * (self.config.alpha_recovery * A_j - L_ij)
-                            denominator = (1 - p_j) * L_ij
-                            bank_i.rij[j] = numerator / denominator  # eq. 9
-                            bank_i.asset_i_avg_ir += bank_i.A
-                            bank_i.asset_j_avg_ir += bank_j.A
-                        if bank_i.rij[j] < 0:
-                            bank_i.rij[j] = self.config.r_i0
-                except ZeroDivisionError:
-                    bank_i.rij[j] = self.config.r_i0
-            bank_i.r = np.sum(bank_i.rij) / (self.config.N - 1)
+                        # eq. 4: conditional expected loss given default
+                        EL_given_d = ((1 - b_j) * (L_ij - alpha * A_j)
+                                      + b_j * (1 - eta) * L_ij)
+                        # eq. 8: zero-profit rate with BT 2017 screening costs
+                        rij = (p_j * EL_given_d + screening_cost) / ((1 - p_j) * L_ij)
+
+                # Floor at initial rate for negative; keep np.inf for market exclusion
+                if rij < 0:
+                    rij = self.config.r_i0
+
+                bank_i.rij[j] = rij
+                bank_i.L_ij_max[j] = L_ij
+
+                # Accumulate for statistics averaging
+                bank_i.asset_i_avg_ir += bank_i.A
+                bank_i.asset_j_avg_ir += bank_j.A
+
+            # Alias for stats compatibility (line 517: np.mean(bank.c_avg_ir))
+            bank_i.c_avg_ir = bank_i.L_ij_max
+
+            # Average rate: filter out np.inf and self-rate (0)
+            valid_rates = [r for r in bank_i.rij if 0 < r < np.inf]
+            bank_i.r = np.mean(valid_rates) if valid_rates else self.config.r_i0
             bank_i.asset_i_avg_ir = bank_i.asset_i_avg_ir / (self.config.N - 1)
             bank_i.asset_j_avg_ir = bank_i.asset_j_avg_ir / (self.config.N - 1)
-        # Compute system-wide min interest rate r_min (recomputed each period)
-        min_r = min(self.banks, key=lambda k: k.r if k.r > 0 else np.inf).r
-        # T_max: recomputed each period
-        T_max = max(self.banks, key=lambda k: k.age).age
-        # L_max: recomputed each period
-        L_max = 0
+
+        # eq. 9: equity-only fitness (replaces compound fitness)
         for bank in self.banks:
-            for j in range(self.config.N):
-                if bank.c_avg_ir[j] > L_max:
-                    L_max = bank.c_avg_ir[j]
-        # Fitness φ_i (eq. 11) with exposure weight ω_{i,j} (eq. 12)
-        # For the fitness stored per-bank we use the lender's perspective:
-        # each bank_i's fitness is evaluated by its borrowers
-        for bank in self.banks:
-            if bank.r <= 0 or T_max == 0 or L_max == 0:
-                bank.mu = 0
-            else:
-                # Use the bank's own loan to its borrower for ω; for aggregate fitness,
-                # average over all potential borrowers
-                reputation = bank.age / T_max  # eq. 11: T_i / T_max
-                price = min_r / bank.r if bank.r > 0 else 0  # eq. 11: r_min / r^{i,j}
-                # For aggregate bank fitness, use average ω across all potential loans
-                omega_sum = 0
-                omega_count = 0
-                for j in range(self.config.N):
-                    if j != bank.id and bank.c_avg_ir[j] > 0:
-                        omega_sum += bank.c_avg_ir[j] / L_max  # eq. 12
-                        omega_count += 1
-                omega_avg = omega_sum / omega_count if omega_count > 0 else 0.5
-                bank.mu = omega_avg * reputation + (1 - omega_avg) * price  # eq. 11
+            bank.mu = bank.E / self.maxE if self.maxE > 0 else 0
 
     def setup_links(self):
         self.config.lender_change.step_setup_links(self)
@@ -1843,52 +2117,120 @@ class Bank:
         self.active_borrowers = {}
         self.asset_i = 0
         self.asset_j = 0
-        self.age = 0  # T_i: institutional age (periods survived), used in eqs. 3–5, 11
+        self.A_lagged = self.C + self.L + self.R  # eq. 3: lagged total assets for b_j
+        self.L_ij_max = [0.0] * self.model.config.N  # eq. 6: bilateral exposure caps
+        # Snapshot fields: capture loan relationship BEFORE repayments resolve,
+        # so propagate_lender_failures() knows who was borrowing from whom.
+        self._snapshot_loan = 0.0
+        self._snapshot_lender_id = None
 
     def replace_bank(self):
         self.failures += 1
         self.__init__()
 
     def do_bankruptcy(self, phase):
+        # Guard: prevent re-entry if bank already processed in this cascade
+        if self.failed:
+            return 0
+
+        # eq. 4: two-state conditional loss (bailout vs. no bailout)
         self.failed = True
         self.model.statistics.compute_another_bankruptcy(self, phase)
-        recovered_in_fire_sales = self.L * self.model.config.rho
-        recovered = recovered_in_fire_sales - self.D
-        if recovered < 0:
-            recovered = 0
-        if recovered > self.l:
-            recovered = self.l
-        bad_debt = self.l - recovered
-        self.D = 0
-        if not self.get_lender() is None and self.l > 0:
+
+        # Decompose bankruptcy by cause
+        t = self.model.t
+        if 'shock' in phase:
+            self.model.statistics.bankruptcies_shock[t] += 1
+        elif phase == 'loans' or 'rationing' in phase:
+            self.model.statistics.bankruptcies_rationing[t] += 1
+        elif 'repay' in phase:
+            self.model.statistics.bankruptcies_repay[t] += 1
+        elif 'contagion' in phase:
+            self.model.statistics.bankruptcies_contagion[t] += 1
+        elif 'tax' in phase or 'levy' in phase:
+            self.model.statistics.bankruptcies_fiscal[t] += 1
+
+        # ── Upward channel: bad debt to this bank's lender ──────────
+        recovered_total = 0
+        if self.get_lender() is not None and self.l > 0:
+            # eq. 3: bailout probability from LAGGED assets
+            b_j = (self.A_lagged / self.model.max_A_lagged
+                   if self.model.max_A_lagged > 0 else 0)
+
+            eta = self.model.config.eta_bailout
+            alpha = self.model.config.alpha_collateral
+
+            if eta > 0 and random.random() < b_j:
+                # BAILOUT STATE: state absorbs fraction η of the loan
+                # eq. 4 bailout branch: lender loss depends on fiscal regime
+                bailout_amount = eta * self.l
+
+                if self.model.config.fiscal_regime == "resolution_fund":
+                    # Draw from pre-funded resolution fund
+                    available = self.model.resolution_fund_balance
+                    if available >= bailout_amount:
+                        self.model.resolution_fund_balance -= bailout_amount
+                        bad_debt = (1 - eta) * self.l
+                    else:
+                        # Fund depleted: partial bailout
+                        self.model.resolution_fund_balance = 0
+                        actual_covered = available
+                        bad_debt = self.l - actual_covered
+                        self.model.statistics.fund_depleted_events[self.model.t] += 1
+                elif self.model.config.fiscal_regime == "socialized_tax":
+                    # Accumulate for synchronous end-of-period taxation
+                    self.model.period_bailout_bill += bailout_amount
+                    bad_debt = (1 - eta) * self.l
+                else:  # "none" — free bailout, no fiscal cost
+                    bad_debt = (1 - eta) * self.l
+
+                # Track bailout statistics (all regimes)
+                self.model.statistics.bailout_bill[self.model.t] += bailout_amount
+                self.model.statistics.bailout_count[self.model.t] += 1
+
+                self.model.log.debug(phase,
+                    f'{self.get_id()} BAILED OUT: b_j={b_j:.3f}, '
+                    f'bailout={bailout_amount:.4f}, residual_bad_debt={bad_debt:.4f}')
+            else:
+                # NO BAILOUT STATE: restore professor's depositor-priority waterfall
+                # Liquidate long-term assets at fire-sale price rho, depositors paid first,
+                # lender gets whatever remains. This makes TBTF failure catastrophic.
+                liquidation_proceeds = self.model.config.rho * self.L
+                after_depositors = max(liquidation_proceeds - self.D, 0)
+                recovered_for_lender = min(after_depositors, self.l)
+                bad_debt = self.l - recovered_for_lender
+                if recovered_for_lender > 0:
+                    self.get_lender().C += recovered_for_lender
+
+                self.model.log.debug(phase,
+                    f'{self.get_id()} NO BAILOUT: b_j={b_j:.3f}, '
+                    f'liquidation={liquidation_proceeds:.4f}, after_dep={after_depositors:.4f}, '
+                    f'bad_debt={bad_debt:.4f}')
+
+            # Apply bad debt to lender (one-hop contagion, matching professor's code)
             if bad_debt > 0:
                 self.get_lender().B += bad_debt
                 self.get_lender().E -= bad_debt
                 if self.get_lender().E < 0:
-                    self.model.statistics.compute_another_bankruptcy(
-                        self.get_lender(),
-                        f"borrower {self.get_id()} fails without returning loan and E={self.get_lender().E}")
-                    self.model.log.debug(phase, '{} lender is bankrupted borrower {} not return loan and E<0: {:.4f}'.
-                                         format(self.get_lender().get_id(), self.get_id(), self.get_lender().E))
-                    self.get_lender().failed = True
-                self.get_lender().C += recovered
-                self.model.log.debug(phase,
-                                     '{} bankrupted (fire sale={:.4f},recovers={:.4f},paidD={:.4f})'
-                                     '(lender{}.ΔB={:.4f},ΔC={:.4f})'.
-                                     format(self.get_id(), recovered_in_fire_sales, recovered, self.D,
-                                            self.get_lender().get_id(short=True), bad_debt, recovered))
-                self.model.statistics.compute_another_bankruptcy(
-                    self, f"in {phase} with l={self.l}")
-            elif self.l > 0 and self.get_lender() is not None:
-                self.get_lender().C += self.l
-                self.model.log.debug(phase, '{} bankrupted (lender{}.ΔB=0,ΔC={}) (paidD={})'.format(
-                    self.get_id(), self.get_lender().get_id(short=True), recovered, self.l))
-                self.model.statistics.compute_another_bankruptcy(
-                    self, f"in {phase} but pays loan")
-            self.get_lender().s += recovered
+                    self.model.log.debug(phase,
+                        f'{self.get_lender().get_id()} contagion: '
+                        f'bad_debt={bad_debt:.4f} pushed E<0')
+                    if not self.get_lender().failed:
+                        self.get_lender().failed = True
+                        self.model.statistics.compute_another_bankruptcy(
+                            self.get_lender(),
+                            f"contagion from {self.get_id()}: bad_debt={bad_debt:.4f}")
+                        self.model.statistics.bankruptcies_contagion[self.model.t] += 1
+
+            # Clean up lender's books
+            recovered_total = max(self.l - bad_debt, 0)
+            if not self.get_lender().failed:
+                self.get_lender().s += recovered_total
             if self.id in self.get_lender().active_borrowers:
                 del self.get_lender().active_borrowers[self.id]
-        return recovered
+
+        self.D = 0
+        return recovered_total
 
     def do_fire_sales(self, amount_to_sell, reason, phase):
         cost_of_sell = (amount_to_sell / self.model.config.rho) if self.model.config.rho else np.inf
@@ -1914,6 +2256,8 @@ class Bank:
                                          '{} new E={:.4f} is under threshold {:.4f} and makes bankruptcy of bank: {}'.
                                          format(self.get_id(), self.E, self.model.config.alfa, reason))
                     self.do_bankruptcy(phase)
+                if not self.failed:
+                    self.model.statistics.fire_sale_survivors[self.model.t] += 1
                 return amount_to_sell
 
     def __str__(self, details=False):
@@ -1961,75 +2305,10 @@ class Bank:
 
 class ModelOptimized(Model):
     """
-    Improved version optimized for many executions
+    Improved version optimized for many executions.
+    Inherits TBTF do_interest_rate() from Model — old BT 2017 override removed.
     """
-
-    def _calculate_rij(self, bank_i, bank_j, L_ij):
-        """Interest rate from zero-profit condition (eq. 9)"""
-        p_j = 1 - bank_j.prob_surviving  # eq. 2
-        if bank_j.prob_surviving == 0 or L_ij <= 0:
-            return self.config.r_i0
-        A_i = bank_i.A
-        A_j = bank_j.A
-        # K_{i,j} = σ(T_i)*A^i - δ(T_j)*A^j (eq. 5)
-        sigma_i = self.config.sigma_min + self.config.gamma_screening * math.log(1 + bank_i.age)  # eq. 3
-        delta_j = self.config.delta_min + self.config.gamma_screening * math.log(1 + bank_j.age)  # eq. 4
-        K_ij = sigma_i * A_i - delta_j * A_j  # eq. 5
-        # r^{i,j} = [K_{i,j} - p_j*(α*A^j - L^{i,j})] / [(1-p_j)*L^{i,j}] (eq. 9)
-        numerator = K_ij - p_j * (self.config.alpha_recovery * A_j - L_ij)
-        denominator = (1 - p_j) * L_ij
-        if denominator == 0:
-            return self.config.r_i0
-        rij = numerator / denominator
-        return rij if rij >= 0 else self.config.r_i0
-
-    def do_interest_rate(self):
-        super().do_interest_rate_common_part()
-        for bank_i in self.banks:
-            bank_i.asset_i_avg_ir = 0
-            bank_i.asset_j_avg_ir = 0
-            A_i = bank_i.A
-            for j in range(self.config.N):
-                if j == bank_i.id:
-                    bank_i.rij[j] = 0
-                    continue
-
-                bank_j = self.banks[j]
-                L_ij = bank_i.c_avg_ir[j]  # L^{i,j} = (1-h^j)*A^j (eq. 10)
-                A_j = bank_j.A
-                bank_i.rij[j] = self._calculate_rij(bank_i, bank_j, L_ij)
-
-                if bank_j.prob_surviving != 0 and L_ij > 0:
-                    bank_i.asset_i_avg_ir += A_i
-                    bank_i.asset_j_avg_ir += A_j
-
-            N_minus_1 = self.config.N - 1
-            bank_i.r = np.sum(bank_i.rij) / N_minus_1
-            bank_i.asset_i_avg_ir /= N_minus_1
-            bank_i.asset_j_avg_ir /= N_minus_1
-        # System-wide quantities recomputed each period
-        min_r = min(self.banks, key=lambda k: k.r if k.r > 0 else np.inf).r
-        T_max = max(self.banks, key=lambda k: k.age).age
-        L_max = 0
-        for bank in self.banks:
-            for j in range(self.config.N):
-                if bank.c_avg_ir[j] > L_max:
-                    L_max = bank.c_avg_ir[j]
-        # Fitness φ_i (eq. 11) with exposure weight ω_{i,j} (eq. 12)
-        for bank in self.banks:
-            if bank.r <= 0 or T_max == 0 or L_max == 0:
-                bank.mu = 0
-            else:
-                reputation = bank.age / T_max  # eq. 11
-                price = min_r / bank.r if bank.r > 0 else 0  # eq. 11
-                omega_sum = 0
-                omega_count = 0
-                for j in range(self.config.N):
-                    if j != bank.id and bank.c_avg_ir[j] > 0:
-                        omega_sum += bank.c_avg_ir[j] / L_max  # eq. 12
-                        omega_count += 1
-                omega_avg = omega_sum / omega_count if omega_count > 0 else 0.5
-                bank.mu = omega_avg * reputation + (1 - omega_avg) * price  # eq. 11
+    pass
 
 
 class Utils:

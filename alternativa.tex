@@ -1,0 +1,211 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+
+\begin{document}
+
+\section{The Model}
+
+\subsection{Market Environment and Balance Sheets}
+
+We consider a sequential economy operating in discrete time $t \in \{0, 1, 2, \dots\}$,
+populated by a finite set of $N$ heterogeneous banks. Each bank $i$ operates under the
+balance sheet identity
+\begin{equation}
+    L_{i} + C_{i} + R_{i} = D_{i} + E_{i}
+\end{equation}
+where $L_{i}$ are long-term assets (granted loans), $C_{i}$ is available lending capacity,
+$R_{i}$ are reserves, $D_{i}$ are customer deposits, and $E_{i}$ is equity capital.
+Time subscripts are omitted where no ambiguity arises.
+
+%---------------------------------------------------------------
+\subsection{Liquidity Shocks and Market Roles}
+
+Each period, banks receive exogenous deposit shocks $\Delta D_{i,t}$. A positive realization
+($\Delta D_{i,t} > 0$) generates excess liquidity, making bank $i$ a potential lender;
+a negative realization ($\Delta D_{i,t} < 0$) creates a shortfall, making bank $i$ a
+potential borrower. Lending capacity $C_{i,t}$ is thus determined by deposit dynamics.
+
+%---------------------------------------------------------------
+\subsection{Default and Bailout Probabilities}
+
+The default probability of borrower $j$ is defined as a decreasing function of its
+equity relative to the system maximum:
+\begin{equation}
+    p_{j} = 1 - \frac{E_{j}}{E_{\max}}
+    \quad \Rightarrow \quad
+    \begin{cases} p_{j} = 1 & \text{if } E_{j} = 0 \\ p_{j} = 0 & \text{if } E_{j} = E_{\max} \end{cases}
+\end{equation}
+
+The bailout probability of borrower $j$ scales with its relative asset size:
+\begin{equation}
+    b_{j} = \frac{A_{j,t-1}}{A_{\max,t-1}}
+    \quad \Rightarrow \quad
+    \begin{cases} b_{j} = 1 & \text{if } A_{j} = A_{\max} \\ b_{j} = 0 & \text{if } A_{j} = 0 \end{cases}
+\end{equation}
+$b_j$ is evaluated at $t-1$ to reflect that lenders observe the borrower's asset size
+prior to the current period's shock, introducing a one-period information lag consistent
+with the timing of interbank negotiations.\footnote{This lag also prevents simultaneity
+between the shock that determines market roles and the size signal that governs bailout
+expectations.}
+
+%---------------------------------------------------------------
+\subsection{Expected Loss and the Basel IRB Framework}
+
+In the event of default, the lender's recovery depends on whether a state bailout occurs.
+We map our parameters directly onto the Basel Internal Ratings-Based (IRB) framework,
+where the expected loss (EL) of a credit exposure is a function of the Probability of
+Default (PD), the Exposure at Default (EAD), and the Loss Given Default (LGD).
+
+In our model, the PD is $p_j$ and the EAD is the loan size $L_{ij}$. The absolute
+monetary loss conditional on default, denoted $\mathbb{E}(L \mid d)$ (which maps to
+$\text{EAD} \times \text{LGD}$), is defined as:
+\begin{equation}
+    \mathbb{E}(L \mid d) = (1 - b_{j})(L_{ij} - \alpha A_{j}) + b_{j}(1 - \eta)L_{ij}
+\end{equation}
+Without a bailout, the lender recovers collateral $\alpha A_j$ and incurs a net loss
+$L_{ij} - \alpha A_j$. Under a bailout, the state absorbs a fraction $\eta$ of the loan,
+leaving a residual loss $(1-\eta)L_{ij}$. We impose $0 < \alpha \ll \eta < 1$, reflecting
+that bailout recovery dominates collateral liquidation.
+
+%---------------------------------------------------------------
+\subsection{Internal Capital Constraint and Loan Supply}
+
+Under the IRB framework, banks hold equity capital as a buffer against loss volatility.
+Lender $i$ requires that the expected loss on any bilateral exposure not exceed a strict
+fraction $\gamma$ of its equity base $E_i$, serving as an internal capital adequacy
+constraint:\footnote{This formulation is consistent with the capital constraint
+specifications of Nier et al.\ (2007) and Iori et al.\ (2006), and follows directly from
+the balance sheet structure in Lenzu and Tedeschi (2012).}
+\begin{equation}
+    p_{j}\,\mathbb{E}(L \mid d) \leq \gamma E_{i}
+\end{equation}
+Setting the expected loss constraint to bind and solving for $L_{ij}$, subject to the
+absolute lending capacity ceiling $C_i$, yields the optimal loan supply:
+\begin{equation}
+\boxed{
+    L_{ij} = \min\!\left(
+        \frac{\gamma E_{i} + p_{j}(1 - b_{j})\alpha A_{j}}{p_{j}(1 - b_{j}\eta)},\;
+        C_{i}
+    \right)
+}
+\end{equation}
+By imposing a zero expected economic profit condition, we solve for the competitive
+interest rate $r_{ij}$:
+\begin{equation}
+    \mathbb{E}(\pi) = (1 - p_{j})\,r_{ij}L_{ij} - p_{j}\,\mathbb{E}(L \mid d) - \kappa = 0
+\end{equation}
+\begin{equation}
+\boxed{
+    r_{ij} = \frac{p_{j}\,\mathbb{E}(L \mid d) + \kappa}{(1 - p_{j})\,L_{ij}}
+}
+\end{equation}
+where $\kappa$ denotes exogenous per-loan operational costs. Note that $r_{ij} \to \infty$
+as $p_j \to 1$: borrowers approaching absolute insolvency are priced out of the
+market entirely.
+%---------------------------------------------------------------
+\subsection{Network Formation}
+
+At the beginning of each period, borrowers revise their set of potential lending
+agreements via a fitness mechanism. The fitness of lender $i$ is microfounded directly
+from the loan supply equation. Since $L_{ij}$ is linear in $E_i$,
+\begin{equation}
+    \frac{\partial L_{ij}}{\partial E_{i}} = \frac{\gamma}{p_{j}(1 - b_{j}\eta)} > 0
+\end{equation}
+a borrower seeking to maximize credit access rationally targets the most capitalized
+lender. Moreover, the TBTF amplification condition $\eta > p_j\alpha A_j /
+(\gamma E_i + p_j \alpha A_j)$ is decreasing in $E_i$, so well-capitalized lenders
+are precisely those for whom the bailout distortion is most operative. The fitness of
+lender $i$ is therefore defined as its normalized equity ratio:
+\begin{equation}
+    \Phi_{i} = \frac{E_{i}}{E_{\max}}
+\end{equation}
+Borrower $j$ severs its link to lender $k$ and rewires to a randomly drawn lender $i$
+with probability:
+\begin{equation}
+    P_{ij} = \frac{1}{1 + e^{-\beta(\Phi_{i} - \Phi_{k})}}
+\end{equation}
+where $\beta \geq 0$ governs the intensity of choice. Low values of $\beta$ yield
+near-random topologies; high values amplify fitness differentials, concentrating
+borrowing relationships on the most capitalized lenders.
+%---------------------------------------------------------------
+
+
+
+
+
+%------------------------------------------------------------------------------------
+\subsection{Comparative Statics}
+
+The interior loan supply $L_{ij}$ has the following properties.
+
+\medskip
+\noindent\textbf{(i) Effect of default risk.}
+\begin{equation}
+    \frac{\partial L_{ij}}{\partial p_{j}} = -\frac{\gamma E_{i}}{p_{j}^{2}(1 - b_{j}\eta)} < 0
+\end{equation}
+Loan supply is strictly decreasing in default probability, as higher risk tightens
+the expected loss constraint.
+
+\medskip
+\noindent\textbf{(ii) Effect of bailout probability.}
+
+Differentiating the interior solution with respect to $b_j$:
+\begin{equation}
+    \frac{\partial L_{ij}}{\partial b_{j}}
+    = \frac{\eta\,\gamma E_{i} + p_{j}\alpha A_{j}(\eta - 1)}{p_{j}(1 - b_{j}\eta)^{2}}
+\end{equation}
+The denominator $p_j(1-b_j\eta)^2$ is strictly positive for $p_j > 0$. The sign of
+the derivative is therefore determined entirely by the numerator. Setting it to be
+positive:
+\begin{align}
+    \eta\,\gamma E_{i} + p_{j}\alpha A_{j}(\eta - 1) &> 0 \notag \\
+    \eta\,\gamma E_{i} + p_{j}\alpha A_{j}\eta - p_{j}\alpha A_{j} &> 0 \notag \\
+    \eta(\gamma E_{i} + p_{j}\alpha A_{j}) &> p_{j}\alpha A_{j}
+\end{align}
+which yields the condition:
+\begin{equation}
+\boxed{
+    \frac{\partial L_{ij}}{\partial b_{j}} > 0
+    \iff
+    \eta > \frac{p_{j}\alpha A_{j}}{\gamma E_{i} + p_{j}\alpha A_{j}}
+}
+\end{equation}
+The right-hand side is bounded in $(0,1)$ whenever $\gamma E_i > 0$. Under the
+maintained assumption $\alpha \ll \eta$, the right-hand side is small and the condition
+is satisfied generically. The intuition is direct: a higher bailout probability relaxes
+the loss-given-default, which loosens the expected loss constraint and allows the lender
+to extend more credit. The strength of this effect increases with $\eta$ and diminishes
+with $\alpha$ and $p_j$.
+
+\medskip
+\noindent\textit{Boundary case $\gamma E_i = 0$.} If the lender holds no equity buffer,
+the expected loss constraint collapses to $p_j \mathbb{E}(L \mid d) = 0$, so the
+loan is backed purely by collateral:
+\begin{equation}
+    L_{ij} = \frac{(1 - b_{j})\,\alpha A_{j}}{1 - b_{j}\eta} \leq \alpha A_{j}
+\end{equation}
+In this case the numerator of $\partial L_{ij}/\partial b_j$ becomes
+$p_j \alpha A_j (\eta - 1) < 0$, so the derivative reverses sign. The boundary
+cases are summarised in Table~\ref{tab:boundary}.
+
+\begin{table}[h]
+\centering
+\caption{Boundary cases for loan supply and interest rate}
+\label{tab:boundary}
+\begin{tabular}{lll}
+\toprule
+Condition & $L_{ij}$ & $r_{ij}$ \\
+\midrule
+$b_j = 0$ & $\dfrac{\gamma E_i + p_j \alpha A_j}{p_j}$ & $\dfrac{p_j(L_{ij} - \alpha A_j) + \kappa}{(1-p_j)L_{ij}}$ \\[10pt]
+$b_j = 1$ & $\dfrac{\gamma E_i}{p_j(1-\eta)}$ & $\dfrac{p_j(1-\eta)L_{ij} + \kappa}{(1-p_j)L_{ij}}$ \\[10pt]
+$p_j = 0$ & $C_i$ & $\dfrac{\kappa}{C_i}$ \\[10pt]
+$p_j = 1$ & $\dfrac{\gamma E_i + (1-b_j)\alpha A_j}{1 - b_j\eta}$ & $\to \infty$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

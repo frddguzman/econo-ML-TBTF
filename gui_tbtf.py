@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Web GUI v3 for the Interbank ABM Simulator.
-Adds age-rate scatter plot diagnostic (Section 5 of thesis spec).
-Run:  python gui_v3.py
+Web GUI for the Interbank ABM Simulator — TBTF extension.
+Run:  python gui_tbtf.py
 Then open http://127.0.0.1:5002 in a browser.
 """
 import matplotlib
@@ -30,7 +29,7 @@ VALID_ALGORITHMS = [
     'ShockedMarket3', 'SmallWorld',
 ]
 
-# All statistics to extract
+# All statistics to extract (including TBTF)
 STAT_NAMES = [
     # Balance sheet
     'equity', 'deposits', 'reserves', 'liquidity', 'loans',
@@ -42,11 +41,13 @@ STAT_NAMES = [
     'fitness', 'active_lenders', 'active_borrowers', 'num_banks',
     # Extra
     'num_loans', 'incrementD',
+    # TBTF
+    'bailout_bill', 'bailout_count', 'bailout_tax_total', 'tax_induced_failures',
 ]
 
 
 def safe_list(arr, length):
-    """Convert a numpy array slice to a JSON-safe Python list (NaN/Inf → None)."""
+    """Convert a numpy array slice to a JSON-safe Python list (NaN/Inf -> None)."""
     values = arr[:length].tolist()
     return [
         None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else v
@@ -55,7 +56,7 @@ def safe_list(arr, length):
 
 
 def build_network_image(model):
-    """Render the final bank→lender network as a base64-encoded PNG."""
+    """Render the final bank->lender network as a base64-encoded PNG."""
     G = nx.DiGraph()
     for bank in model.banks:
         G.add_node(bank.id)
@@ -73,18 +74,31 @@ def build_network_image(model):
         pos = nx.spring_layout(G, seed=42)
         colors = []
         for node in G.nodes():
-            if model.banks[node].active_borrowers:
-                colors.append('#e67e22')
-            elif model.banks[node].failed:
+            b = model.banks[node]
+            if b.failed:
                 colors.append('#cccccc')
+            elif hasattr(b, 'active_borrowers') and b.active_borrowers:
+                colors.append('#e67e22')
             else:
                 colors.append('#3498db')
+
+        # Size nodes by total assets (bigger = more TBTF)
+        max_a = max((model.banks[n].A for n in G.nodes() if not model.banks[n].failed), default=1)
+        sizes = []
+        for node in G.nodes():
+            b = model.banks[node]
+            if b.failed or max_a <= 0:
+                sizes.append(300)
+            else:
+                sizes.append(300 + 700 * (b.A / max_a))
+
         nx.draw(G, pos, ax=ax, with_labels=True, arrows=True,
                 arrowstyle='->', arrowsize=15,
-                node_color=colors, node_size=500,
+                node_color=colors, node_size=sizes,
                 font_size=9, font_color='white', font_weight='bold',
                 edge_color='#999', width=1.5)
-    ax.set_title('Bank Network (borrower \u2192 lender)', fontsize=11, color='#333')
+    ax.set_title('Bank Network (borrower -> lender)\nNode size ~ total assets (TBTF)',
+                 fontsize=11, color='#333')
 
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=120, bbox_inches='tight')
@@ -93,84 +107,50 @@ def build_network_image(model):
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
 
-def collect_snapshot(model):
-    """Collect per-bank data for the age-rate scatter at the current period."""
+def collect_tbtf_snapshot(model):
+    """Per-bank snapshot: equity, assets, bailout probability, interest rate."""
     banks_data = []
-    N = len(model.banks)
-
-    # System-wide quantities (recomputed fresh)
-    T_max = max((b.age for b in model.banks), default=1)
-    if T_max == 0:
-        T_max = 1
-
-    # r values: bank.r is the avg interest rate charged by bank i
-    r_values = [b.r for b in model.banks if hasattr(b, 'r') and b.r > 0]
-    r_min = min(r_values) if r_values else 1.0
-    r_max = max(r_values) if r_values else 1.0
-
-    # L_max from c_avg_ir (loan amounts L^{i,j})
-    L_max = 0
-    for bank in model.banks:
-        if hasattr(bank, 'c_avg_ir') and isinstance(bank.c_avg_ir, list):
-            for val in bank.c_avg_ir:
-                if val > L_max:
-                    L_max = val
-    if L_max == 0:
-        L_max = 1.0
+    max_a_lagged = getattr(model, 'max_A_lagged', 1.0) or 1.0
+    max_e = getattr(model, 'maxE', 1.0) or 1.0
 
     for bank in model.banks:
         if bank.failed:
             continue
-
-        age = getattr(bank, 'age', 0)
+        A = getattr(bank, 'A', 0)
+        A_lag = getattr(bank, 'A_lagged', A)
+        E = getattr(bank, 'E', 0)
         r = getattr(bank, 'r', 0)
-        if r <= 0:
-            continue
+        p_j = 1 - (E / max_e) if max_e > 0 else 1.0
+        b_j = A_lag / max_a_lagged if max_a_lagged > 0 else 0
 
-        # Normalized reputation: T_i / T_max
-        reputation = age / T_max
-
-        # Normalized price: r_min / r_i (higher = cheaper = better)
-        price = r_min / r if r > 0 else 0
-
-        # Average omega (exposure weight) for this bank
-        omega_avg = 0.5
-        if hasattr(bank, 'c_avg_ir') and isinstance(bank.c_avg_ir, list):
-            omega_sum = 0
-            omega_count = 0
-            for j in range(len(bank.c_avg_ir)):
-                if j != bank.id and bank.c_avg_ir[j] > 0:
-                    omega_sum += bank.c_avg_ir[j] / L_max
-                    omega_count += 1
-            if omega_count > 0:
-                omega_avg = omega_sum / omega_count
-
-        # Number of active borrowers
-        n_borrowers = len(bank.active_borrowers) if isinstance(bank.active_borrowers, dict) else 0
+        n_borrowers = sum(
+            1 for b in model.banks
+            if not b.failed and b.id != bank.id and b.get_lender() is not None and b.get_lender().id == bank.id
+        )
 
         banks_data.append({
             'id': bank.id,
-            'age': age,
-            'r': r,
-            'reputation': reputation,
-            'price': price,
-            'omega': omega_avg,
+            'E': round(E, 4),
+            'A': round(A, 4),
+            'A_lagged': round(A_lag, 4),
+            'r': round(r, 6),
+            'p_j': round(p_j, 4),
+            'b_j': round(b_j, 4),
+            'phi': round(E / max_e, 4) if max_e > 0 else 0,
             'n_borrowers': n_borrowers,
         })
 
     return {
         'period': model.t,
         'banks': banks_data,
-        'T_max': T_max,
-        'r_min': r_min,
-        'r_max': r_max,
-        'L_max': L_max,
+        'max_E': round(max_e, 4),
+        'max_A_lagged': round(max_a_lagged, 4),
     }
 
 
 @app.route('/')
 def index():
-    return render_template('index_v3.html')
+    return render_template('index_tbtf.html')
 
 
 @app.route('/api/simulate', methods=['POST'])
@@ -188,13 +168,35 @@ def simulate():
         lc_m = int(params.get('lc_m', 1))
 
         config_params = {'N': N, 'T': T}
-        float_keys = [
-            'sigma_min', 'delta_min', 'gamma_screening', 'alpha_recovery',
-            'beta', 'mu', 'omega', 'rho',
-        ]
-        for key in float_keys:
-            if key in params:
-                config_params[key] = float(params[key])
+
+        # Map GUI parameter names to Config attribute names
+        float_keys = {
+            # Screening costs
+            'phi': 'phi',
+            'chi': 'chi',
+            # Recovery & switching
+            'rho': 'rho',
+            'beta': 'beta',
+            'alfa': 'alfa',
+            # Shocks
+            'mu': 'mu',
+            'omega': 'omega',
+            # TBTF parameters
+            'gamma_capital': 'gamma_capital',
+            'eta_bailout': 'eta_bailout',
+            'alpha_collateral': 'alpha_collateral',
+        }
+        for gui_key, config_key in float_keys.items():
+            if gui_key in params:
+                config_params[config_key] = float(params[gui_key])
+
+        # Fiscal regime (string parameter)
+        if 'fiscal_regime' in params:
+            config_params['fiscal_regime'] = str(params['fiscal_regime'])
+        # Resolution fund parameters
+        for k in ('fund_levy_rate', 'fund_initial_balance'):
+            if k in params:
+                config_params[k] = float(params[k])
 
         # --- Run simulation with snapshot collection ---
         model = interbank.Model()
@@ -203,7 +205,7 @@ def simulate():
         model.test = True
         model.initialize(seed=seed, generate_plots=False)
 
-        # Determine snapshot periods: every T/10 + final
+        # Snapshot every T/10 + final
         snapshot_interval = max(1, T // 10)
         snapshot_periods = set(range(0, T, snapshot_interval))
         snapshot_periods.add(T - 1)
@@ -212,13 +214,11 @@ def simulate():
         for step in range(T):
             model.forward()
             if step in snapshot_periods:
-                snapshots.append(collect_snapshot(model))
-            # Early stop if too few banks
+                snapshots.append(collect_tbtf_snapshot(model))
             if not model.config.allow_replacement_of_bankrupted and len(model.banks) <= 2:
                 model.config.T = model.t
-                # Collect final snapshot if not already
                 if step not in snapshot_periods:
-                    snapshots.append(collect_snapshot(model))
+                    snapshots.append(collect_tbtf_snapshot(model))
                 break
 
         # --- Collect time-series statistics ---
@@ -234,6 +234,10 @@ def simulate():
         bankruptcy_arr = model.statistics.bankruptcy[:t]
         result['bankruptcy_cumulative'] = np.cumsum(bankruptcy_arr).tolist()
 
+        # Cumulative bailout bill
+        bill_arr = model.statistics.bailout_bill[:t]
+        result['bailout_bill_cumulative'] = np.cumsum(bill_arr).tolist()
+
         # Boltzmann switching probability
         result['has_boltzmann'] = model.statistics.P is not None
         if model.statistics.P is not None:
@@ -244,7 +248,7 @@ def simulate():
         # --- Network graph ---
         result['network'] = build_network_image(model)
 
-        # --- Scatter snapshots ---
+        # --- TBTF scatter snapshots ---
         result['snapshots'] = snapshots
 
         return jsonify(result)
@@ -255,5 +259,5 @@ def simulate():
 
 
 if __name__ == '__main__':
-    print("Starting Interbank ABM GUI v3 at http://127.0.0.1:5002")
+    print("Starting Interbank ABM TBTF GUI at http://127.0.0.1:5002")
     app.run(debug=True, port=5002)

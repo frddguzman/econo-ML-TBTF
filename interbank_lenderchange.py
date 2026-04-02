@@ -414,48 +414,34 @@ class Boltzmann(LenderChange):
         if this_model.export_datafile:
             this_model.statistics.get_graph(0)
 
-    def _compute_fitness_for_pair(self, this_model, lender_id, borrower_bank):
-        """Compute φ_i for a specific lender-borrower pair (eq. 11) with ω_{i,j} (eq. 12).
-           Returns 0 if interest rate data has not been computed yet (setup_links runs before do_interest_rate)."""
-        if lender_id is None:
-            return 0
-        lender = this_model.banks[lender_id]
-        # Guard: c_avg_ir is only available after do_interest_rate_common_part() has run
-        if not hasattr(lender, 'c_avg_ir') or not isinstance(lender.c_avg_ir, list):
-            return getattr(lender, 'mu', 0)
-        # System-wide quantities recomputed each period
-        T_max = max(this_model.banks, key=lambda k: k.age).age
-        r_min = min((b.r for b in this_model.banks if b.r > 0), default=0)
-        L_max = 0
-        for b in this_model.banks:
-            for j in range(this_model.config.N):
-                if b.c_avg_ir[j] > L_max:
-                    L_max = b.c_avg_ir[j]
-        if T_max == 0 or lender.r <= 0 or L_max == 0:
-            return 0
-        # L^{i,j} for this specific pair (eq. 10)
-        L_ij = lender.c_avg_ir[borrower_bank.id] if borrower_bank.id < len(lender.c_avg_ir) else 0
-        # ω_{i,j} = L^{i,j} / L_max (eq. 12)
-        omega = L_ij / L_max if L_max > 0 else 0.5
-        reputation = lender.age / T_max  # eq. 11
-        price = r_min / lender.r if lender.r > 0 else 0  # eq. 11
-        return omega * reputation + (1 - omega) * price  # eq. 11
-
     def change_lender(self, this_model, bank, t):
-        """ Boltzmann switching using fitness φ (eq. 13) """
+        """ It uses γ but only after t=20, at the beginning only Boltzmann"""
         possible_lender = self.new_lender(this_model, bank)
-        # Compute pair-specific fitness φ for current and candidate lender (eq. 11)
-        phi_candidate = self._compute_fitness_for_pair(this_model, possible_lender, bank)
-        phi_current = self._compute_fitness_for_pair(this_model, bank.lender, bank)
+        if possible_lender is None:
+            possible_lender_mu = 0
+        else:
+            possible_lender_mu = this_model.banks[possible_lender].mu
+        if bank.get_lender() is None:
+            current_lender_mu = 0
+        else:
+            current_lender_mu = bank.get_lender().mu
 
-        # P(i → k) = 1 / (1 + exp(-β * (φ_k - φ_i))) (eq. 13)
-        boltzmann = 1 / (1 + math.exp(-this_model.config.beta * (phi_candidate - phi_current)))
+        # we can now break old links and set up new lenders, using probability P
+        # (equation 8)
+        exponent = -this_model.config.beta * (possible_lender_mu - current_lender_mu)
+        exponent = max(-500, min(500, exponent))  # clamp to prevent math.exp overflow
+        boltzmann = 1 / (1 + math.exp(exponent))
 
         if t < 20:
+            # bank.P = 0.35
+            # bank.P = random.random()
             bank.P = boltzmann
+            # option a) bank.P initially 0.35
+            # option b) bank.P randomly
+            # option c) with t<=20 boltzmann, and later, stabilize it
         else:
             bank.P_yesterday = bank.P
-            # gamma is persistence of the previous attitude
+            # gamma is not sticky/loyalty, persistence of the previous attitude
             bank.P = self.gamma * bank.P_yesterday + (1 - self.gamma) * boltzmann
 
         if bank.P >= self.CHANGE_LENDER_IF_HIGHER:

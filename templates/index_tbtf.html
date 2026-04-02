@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interbank ABM — TBTF Simulator</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 330px;
+    min-width: 330px;
+    background: #fff;
+    border-right: 1px solid #ddd;
+    overflow-y: auto;
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sidebar h1 { font-size: 17px; margin-bottom: 4px; color: #1a1a2e; }
+  .sidebar h1 small {
+    display: block; font-weight: 400; font-size: 11px; color: #888; margin-top: 2px;
+  }
+  details {
+    border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
+  }
+  details[open] { padding-bottom: 8px; }
+  summary {
+    padding: 8px 12px; font-weight: 600; font-size: 13px;
+    cursor: pointer; background: #f8f9fa; user-select: none;
+  }
+  summary:hover { background: #eef1f5; }
+  .param-row {
+    display: flex; align-items: center; padding: 4px 12px; gap: 6px;
+  }
+  .param-row label { flex: 1; font-size: 12px; color: #555; }
+  .param-row label .sym { font-weight: 600; color: #1a1a2e; margin-right: 2px; }
+  .param-row input, .param-row select {
+    width: 90px; padding: 4px 6px; border: 1px solid #ccc;
+    border-radius: 4px; font-size: 12px; text-align: right;
+  }
+  .param-row select { text-align: left; width: 140px; }
+  .hint { font-size: 10px; color: #999; padding: 2px 12px; }
+  .tbtf-highlight {
+    border-color: #7c3aed;
+  }
+  .tbtf-highlight > summary {
+    background: #f5f0ff;
+    color: #5b21b6;
+  }
+  #btn-run {
+    margin-top: 10px; padding: 10px; background: #2563eb; color: #fff;
+    border: none; border-radius: 6px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  #btn-run:hover { background: #1d4ed8; }
+  #btn-run:disabled { background: #93b4f5; cursor: wait; }
+  #status { font-size: 11px; color: #888; text-align: center; margin-top: 4px; min-height: 16px; }
+  #status.error { color: #dc2626; }
+
+  /* Main area */
+  .main { flex: 1; overflow-y: auto; padding: 20px; }
+
+  .network-section {
+    background: #fff; border-radius: 8px; padding: 12px;
+    margin-bottom: 20px; text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .network-section h2 { font-size: 14px; color: #555; margin-bottom: 8px; }
+  #network-img { max-width: 100%; max-height: 420px; border-radius: 4px; }
+  .network-placeholder { color: #aaa; font-size: 13px; padding: 60px 0; }
+
+  .panel {
+    background: #fff; border-radius: 8px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .panel h2 {
+    font-size: 15px; color: #1a1a2e; margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 2px solid #e0e0e0;
+  }
+  .panel.tbtf-panel h2 {
+    border-bottom-color: #7c3aed;
+    color: #5b21b6;
+  }
+  .panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 12px;
+  }
+  .chart-slot { min-height: 280px; }
+
+  .scatter-controls {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .scatter-controls label { font-size: 12px; color: #555; font-weight: 600; }
+  .scatter-controls input[type="range"] { width: 200px; cursor: pointer; }
+  .scatter-controls .period-label {
+    font-size: 13px; font-weight: 600; color: #7c3aed; min-width: 60px;
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+  <h1>
+    Interbank ABM <span style="font-size:11px;color:#7c3aed">TBTF</span>
+    <small>Endogenous Too-Big-To-Fail Dynamics</small>
+  </h1>
+
+  <details open>
+    <summary>Simulation</summary>
+    <div class="param-row">
+      <label><span class="sym">N</span> Banks</label>
+      <input id="p-N" type="number" value="5" min="2" max="200" step="1">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">T</span> Periods</label>
+      <input id="p-T" type="number" value="10" min="1" max="5000" step="1">
+    </div>
+    <div class="param-row">
+      <label>Seed</label>
+      <input id="p-seed" type="number" value="26462" min="0" step="1">
+    </div>
+    <div class="param-row">
+      <label>Lender mechanism</label>
+      <select id="p-algorithm">
+        <option value="Boltzmann" selected>Boltzmann</option>
+        <option value="InitialStability">InitialStability</option>
+        <option value="Preferential">Preferential</option>
+        <option value="RestrictedMarket">RestrictedMarket</option>
+        <option value="ShockedMarket">ShockedMarket</option>
+        <option value="ShockedMarket2">ShockedMarket2</option>
+        <option value="ShockedMarket3">ShockedMarket3</option>
+        <option value="SmallWorld">SmallWorld</option>
+      </select>
+    </div>
+    <div class="param-row">
+      <label><span class="sym">p</span> Attachment prob.</label>
+      <input id="p-lc_p" type="number" value="0.5" min="0" max="1" step="0.05">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">m</span> Graph degree</label>
+      <input id="p-lc_m" type="number" value="1" min="1" step="1">
+    </div>
+  </details>
+
+  <details open class="tbtf-highlight">
+    <summary>TBTF / Bailout (eqs. 2-9)</summary>
+    <div class="param-row">
+      <label>Fiscal Regime</label>
+      <select id="p-fiscal_regime" onchange="toggleFiscalParams()">
+        <option value="socialized_tax" selected>Socialized Tax (default)</option>
+        <option value="none">No Fiscal Cost</option>
+        <option value="resolution_fund">Resolution Fund</option>
+      </select>
+    </div>
+    <div id="fund-params" style="display:none">
+      <div class="param-row">
+        <label><span class="sym">&tau;<sub>fund</sub></span> Levy rate</label>
+        <input id="p-fund_levy_rate" type="number" value="0.005" min="0" max="0.05" step="0.001">
+      </div>
+      <div class="hint">Periodic levy on bank assets to build resolution fund</div>
+      <div class="param-row">
+        <label>Fund initial balance</label>
+        <input id="p-fund_initial_balance" type="number" value="0" min="0" step="1">
+      </div>
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&gamma;</span> Capital adequacy (eq. 5)</label>
+      <input id="p-gamma_capital" type="number" value="0.08" min="0" max="1" step="0.01">
+    </div>
+    <div class="hint">IRB capital constraint: p&middot;E(L|d) &le; &gamma;&middot;E<sub>i</sub></div>
+    <div class="param-row">
+      <label><span class="sym">&eta;</span> Bailout recovery (eq. 4)</label>
+      <input id="p-eta_bailout" type="number" value="0.85" min="0" max="1" step="0.01">
+    </div>
+    <div class="hint">State absorbs &eta;&middot;L<sub>ij</sub> in bailout state</div>
+    <div class="param-row">
+      <label><span class="sym">&alpha;</span> Pricing recovery (eqs. 4,6,8)</label>
+      <input id="p-alpha_collateral" type="number" value="0.05" min="0" max="1" step="0.01">
+    </div>
+    <div class="hint">Ex-ante expected collateral recovery for loan pricing &mdash; condition: &alpha; &ll; &eta;</div>
+  </details>
+
+  <details open>
+    <summary>Screening Costs</summary>
+    <div class="param-row">
+      <label><span class="sym">&phi;</span> Lender screening cost</label>
+      <input id="p-phi" type="number" value="0.025" min="0" step="0.001">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&chi;</span> Borrower screening cost</label>
+      <input id="p-chi" type="number" value="0.015" min="0" step="0.001">
+    </div>
+    <div class="hint">&kappa;<sub>ij</sub> = &chi;&middot;A<sub>i</sub> &minus; &phi;&middot;A<sub>j</sub></div>
+  </details>
+
+  <details>
+    <summary>Recovery &amp; Switching</summary>
+    <div class="param-row">
+      <label><span class="sym">&rho;</span> Fire sale / resolution cost</label>
+      <input id="p-rho" type="number" value="0.3" min="0" max="1" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&beta;</span> Boltzmann intensity (eq. 10)</label>
+      <input id="p-beta" type="number" value="5" min="0" step="0.1">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&alpha;<sub>BT</sub></span> Bankruptcy threshold</label>
+      <input id="p-alfa" type="number" value="0.1" min="0" step="0.01">
+    </div>
+  </details>
+
+  <details>
+    <summary>Shocks</summary>
+    <div class="param-row">
+      <label><span class="sym">&mu;</span> Shock mean</label>
+      <input id="p-mu" type="number" value="0.7" min="0" step="0.01">
+    </div>
+    <div class="param-row">
+      <label><span class="sym">&omega;</span> Shock dispersion</label>
+      <input id="p-omega" type="number" value="0.6" min="0" step="0.01">
+    </div>
+  </details>
+
+  <button id="btn-run" onclick="runSimulation()">Run Simulation</button>
+  <div id="status"></div>
+</div>
+
+<!-- MAIN AREA -->
+<div class="main">
+  <!-- Network -->
+  <div class="network-section">
+    <h2>Bank Network</h2>
+    <div class="network-placeholder" id="network-placeholder">Run a simulation to see results</div>
+    <img id="network-img" style="display:none" alt="Bank network graph">
+  </div>
+
+  <!-- Panel 0: TBTF Scatter (replaces age-rate) -->
+  <div class="panel tbtf-panel" id="panel-scatter" style="display:none">
+    <h2>TBTF Landscape: Equity vs Bailout Probability (eqs. 2-3)</h2>
+    <div class="scatter-controls">
+      <label>Period:</label>
+      <input type="range" id="scatter-slider" min="0" max="0" value="0">
+      <span class="period-label" id="scatter-period-label">t = 0</span>
+    </div>
+    <div class="chart-slot" id="chart-scatter" style="min-height: 380px;"></div>
+  </div>
+
+  <!-- Panel 1: TBTF Statistics -->
+  <div class="panel tbtf-panel" id="panel-tbtf" style="display:none">
+    <h2>TBTF / Bailout Dynamics</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-bailout-bill"></div>
+      <div class="chart-slot" id="chart-bailout-count"></div>
+      <div class="chart-slot" id="chart-bailout-tax"></div>
+      <div class="chart-slot" id="chart-tax-failures"></div>
+    </div>
+  </div>
+
+  <!-- Panel 2: Balance Sheet -->
+  <div class="panel" id="panel-balance" style="display:none">
+    <h2>Balance Sheet</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-composition"></div>
+      <div class="chart-slot" id="chart-liquidity-loans"></div>
+    </div>
+  </div>
+
+  <!-- Panel 3: Market Activity -->
+  <div class="panel" id="panel-market" style="display:none">
+    <h2>Market Activity</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-interest-rate"></div>
+      <div class="chart-slot" id="chart-profits-debt"></div>
+      <div class="chart-slot" id="chart-rationing"></div>
+    </div>
+  </div>
+
+  <!-- Panel 4: Risk & Stability -->
+  <div class="panel" id="panel-risk" style="display:none">
+    <h2>Risk &amp; Stability</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-prob-default"></div>
+      <div class="chart-slot" id="chart-bankruptcies"></div>
+      <div class="chart-slot" id="chart-leverage"></div>
+    </div>
+  </div>
+
+  <!-- Panel 5: Network & Fitness -->
+  <div class="panel" id="panel-network" style="display:none">
+    <h2>Network &amp; Fitness</h2>
+    <div class="panel-grid">
+      <div class="chart-slot" id="chart-fitness"></div>
+      <div class="chart-slot" id="chart-participants"></div>
+      <div class="chart-slot" id="chart-switching" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const C = {
+  blue:    '#2563eb',
+  red:     '#dc2626',
+  green:   '#059669',
+  orange:  '#d97706',
+  purple:  '#7c3aed',
+  pink:    '#db2777',
+  teal:    '#0891b2',
+  lime:    '#65a30d',
+  slate:   '#64748b',
+};
+
+const BASE_LAYOUT = {
+  margin: { t: 36, r: 16, b: 40, l: 56 },
+  paper_bgcolor: '#fff',
+  plot_bgcolor: '#fafafa',
+  hovermode: 'x unified',
+  xaxis: { title: '', gridcolor: '#eee' },
+  yaxis: { gridcolor: '#eee' },
+  legend: { orientation: 'h', y: -0.2, x: 0.5, xanchor: 'center', font: { size: 10 } },
+};
+const PLOT_CFG = { responsive: true, displayModeBar: false };
+
+function mkLayout(title, extra) {
+  return Object.assign({}, BASE_LAYOUT, { title: { text: title, font: { size: 13 } } }, extra || {});
+}
+
+function toggleFiscalParams() {
+  const regime = document.getElementById('p-fiscal_regime').value;
+  document.getElementById('fund-params').style.display =
+    regime === 'resolution_fund' ? '' : 'none';
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+function showPanels() {
+  ['panel-scatter','panel-tbtf','panel-balance','panel-market','panel-risk','panel-network'].forEach(
+    id => document.getElementById(id).style.display = 'block'
+  );
+}
+
+// ── TBTF Scatter ──
+let scatterSnapshots = [];
+
+function renderTBTFScatter(idx) {
+  if (!scatterSnapshots.length) return;
+  idx = Math.max(0, Math.min(idx, scatterSnapshots.length - 1));
+  const snap = scatterSnapshots[idx];
+  const banks = snap.banks;
+
+  document.getElementById('scatter-period-label').textContent = 't = ' + snap.period;
+
+  if (banks.length === 0) {
+    Plotly.newPlot('chart-scatter', [], mkLayout('No active banks at t=' + snap.period, {
+      hovermode: 'closest',
+    }), PLOT_CFG);
+    return;
+  }
+
+  const hoverText = banks.map(b =>
+    `Bank ${b.id} | E=${b.E} | A=${b.A} | r=${b.r.toFixed(4)} | Borrowers: ${b.n_borrowers}`
+  );
+
+  // Bubble: x=b_j (bailout prob), y=p_j (default prob), size=assets, color=fitness
+  const trace = {
+    x: banks.map(b => b.b_j),
+    y: banks.map(b => b.p_j),
+    text: hoverText,
+    mode: 'markers+text',
+    textposition: 'top center',
+    textfont: { size: 9, color: '#555' },
+    customdata: banks.map(b => b.id),
+    hovertemplate: '%{text}<br>b_j=%{x:.3f}, p_j=%{y:.3f}<extra></extra>',
+    marker: {
+      size: banks.map(b => 8 + 30 * b.b_j),  // bigger = more TBTF
+      color: banks.map(b => b.phi),
+      colorscale: [[0, '#dc2626'], [0.5, '#d97706'], [1, '#059669']],
+      cmin: 0, cmax: 1,
+      colorbar: { title: { text: '\u03A6 fitness', font: { size: 11 } }, len: 0.6 },
+      opacity: 0.8,
+      line: { width: 1, color: '#333' },
+    },
+  };
+
+  // Add bank ID labels
+  const labelTrace = {
+    x: banks.map(b => b.b_j),
+    y: banks.map(b => b.p_j),
+    text: banks.map(b => '' + b.id),
+    mode: 'text',
+    textfont: { size: 10, color: '#1a1a2e', family: 'monospace' },
+    hoverinfo: 'skip',
+    showlegend: false,
+  };
+
+  const layout = {
+    title: { text: `TBTF Landscape \u2014 t = ${snap.period}`, font: { size: 13 } },
+    margin: { t: 48, r: 100, b: 52, l: 56 },
+    paper_bgcolor: '#fff',
+    plot_bgcolor: '#fafafa',
+    hovermode: 'closest',
+    xaxis: {
+      title: { text: 'Bailout probability b\u2C7C = A\u2C7C(t\u22121) / A\u2098\u2090\u2093(t\u22121)', font: { size: 12 } },
+      range: [-0.05, 1.05],
+      gridcolor: '#eee',
+    },
+    yaxis: {
+      title: { text: 'Default probability p\u2C7C = 1 \u2212 E\u2C7C/E\u2098\u2090\u2093', font: { size: 12 } },
+      range: [-0.05, 1.05],
+      gridcolor: '#eee',
+    },
+    annotations: [
+      {
+        x: 0.99, y: 0.01, xref: 'paper', yref: 'paper',
+        text: 'Bubble size \u221D b\u2C7C (TBTF) &bull; Color = \u03A6 fitness',
+        showarrow: false, font: { size: 10, color: '#666' },
+        xanchor: 'right', yanchor: 'bottom',
+      },
+      {
+        x: 0.95, y: 0.95, xref: 'paper', yref: 'paper',
+        text: '\u2191 High default + High bailout\n= TBTF danger zone',
+        showarrow: false, font: { size: 10, color: '#dc2626' },
+        xanchor: 'right', yanchor: 'top',
+      }
+    ],
+    shapes: [
+      // Danger zone: top-right quadrant shading
+      {
+        type: 'rect',
+        x0: 0.5, x1: 1.05, y0: 0.5, y1: 1.05,
+        fillcolor: 'rgba(220,38,38,0.05)',
+        line: { color: 'rgba(220,38,38,0.2)', width: 1, dash: 'dot' },
+      }
+    ],
+    showlegend: false,
+  };
+
+  Plotly.newPlot('chart-scatter', [trace, labelTrace], layout, PLOT_CFG);
+}
+
+function renderCharts(data) {
+  const t = data.time;
+
+  // ── TBTF Scatter snapshots ──
+  scatterSnapshots = data.snapshots || [];
+  if (scatterSnapshots.length > 0) {
+    const slider = document.getElementById('scatter-slider');
+    slider.max = scatterSnapshots.length - 1;
+    slider.value = scatterSnapshots.length - 1;
+    renderTBTFScatter(scatterSnapshots.length - 1);
+  }
+
+  // ── Panel 1: TBTF Statistics ──
+
+  // Bailout bill: per-period bar + cumulative line
+  Plotly.newPlot('chart-bailout-bill', [
+    { x: t, y: data.bailout_bill, name: 'Per Period', type: 'bar',
+      marker: { color: C.purple, opacity: 0.6 }, yaxis: 'y' },
+    { x: t, y: data.bailout_bill_cumulative, name: 'Cumulative', type: 'scatter',
+      mode: 'lines', line: { color: C.blue, width: 2.5 }, yaxis: 'y2' },
+  ], mkLayout('Bailout Bill (\u03b7\u00b7L\u1d62\u2c7c absorbed by state)', {
+    yaxis:  { title: 'Per period', gridcolor: '#eee', side: 'left' },
+    yaxis2: { title: 'Cumulative', overlaying: 'y', side: 'right', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Bailout count
+  Plotly.newPlot('chart-bailout-count', [
+    { x: t, y: data.bailout_count, name: 'Bailouts', type: 'bar',
+      marker: { color: C.orange, opacity: 0.75 } },
+  ], mkLayout('Bailout Events per Period', {
+    yaxis: { title: 'Count', gridcolor: '#eee', dtick: 1 },
+  }), PLOT_CFG);
+
+  // Bailout tax
+  Plotly.newPlot('chart-bailout-tax', [
+    { x: t, y: data.bailout_tax_total, name: 'Tax Distributed',
+      fill: 'tozeroy', line: { color: C.red, width: 2 },
+      fillcolor: 'rgba(220,38,38,0.15)' },
+  ], mkLayout('Bailout Tax \u03c4 = bill \u00b7 (A\u2096 / \u03a3A)', {
+    yaxis: { title: 'Total tax', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // Tax-induced failures
+  Plotly.newPlot('chart-tax-failures', [
+    { x: t, y: data.tax_induced_failures, name: 'Tax Failures', type: 'bar',
+      marker: { color: C.pink, opacity: 0.75 } },
+  ], mkLayout('Tax-Induced Failures (fiscal contagion)', {
+    yaxis: { title: 'Count', gridcolor: '#eee', dtick: 1 },
+  }), PLOT_CFG);
+
+  // ── Panel 2: Balance Sheet ──
+
+  Plotly.newPlot('chart-composition', [
+    { x: t, y: data.equity,    name: 'Equity (E)',   stackgroup: 'bs', line: { color: C.blue } },
+    { x: t, y: data.deposits,  name: 'Deposits (D)', stackgroup: 'bs', line: { color: C.teal } },
+    { x: t, y: data.reserves,  name: 'Reserves (R)', stackgroup: 'bs', line: { color: C.slate } },
+  ], mkLayout('System Balance Sheet (stacked)', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-liquidity-loans', [
+    { x: t, y: data.liquidity, name: 'Liquidity (C)', fill: 'tozeroy',
+      line: { color: C.purple }, fillcolor: 'rgba(124,58,237,0.15)' },
+    { x: t, y: data.loans, name: 'Loans (L)', fill: 'tozeroy',
+      line: { color: C.orange }, fillcolor: 'rgba(217,119,6,0.15)' },
+  ], mkLayout('Liquidity vs Loans', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 3: Market Activity ──
+
+  Plotly.newPlot('chart-interest-rate', [
+    { x: t, y: data.interest_rate, name: 'Avg r',
+      line: { color: C.blue, width: 2 },
+      hovertemplate: 't=%{x}<br>r = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Average Interest Rate r (eq. 8)', {
+    yaxis: { title: 'Interest Rate', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-profits-debt', [
+    { x: t, y: data.profits, name: 'Profits',  line: { color: C.green, width: 2 } },
+    { x: t, y: data.B,       name: 'Bad Debt',  line: { color: C.red, width: 2 } },
+  ], mkLayout('Profits vs Bad Debt', {
+    yaxis: { title: 'Amount', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-rationing', [
+    { x: t, y: data.rationing, name: 'Rationing', type: 'bar',
+      marker: { color: C.orange, opacity: 0.75 } },
+  ], mkLayout('Credit Rationing per Period', {
+    yaxis: { title: 'Amount Rationed', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 4: Risk & Stability ──
+
+  Plotly.newPlot('chart-prob-default', [
+    { x: t, y: data.prob_bankruptcy, name: 'Avg p\u2C7C',
+      line: { color: C.red, width: 2 },
+      hovertemplate: 't=%{x}<br>p = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Avg Default Probability p\u2C7C (eq. 2)', {
+    yaxis: { title: 'Probability', range: [0, 1], gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-bankruptcies', [
+    { x: t, y: data.bankruptcy, name: 'Per Period', type: 'bar',
+      marker: { color: C.red, opacity: 0.6 }, yaxis: 'y' },
+    { x: t, y: data.bankruptcy_cumulative, name: 'Cumulative', type: 'scatter',
+      mode: 'lines', line: { color: C.blue, width: 2.5 }, yaxis: 'y2' },
+  ], mkLayout('Bankruptcies', {
+    yaxis:  { title: '', gridcolor: '#eee', side: 'left' },
+    yaxis2: { title: '', overlaying: 'y', side: 'right', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-leverage', [
+    { x: t, y: data.leverage, name: 'Avg Leverage',
+      line: { color: C.purple, width: 2 } },
+  ], mkLayout('Average Leverage Ratio', {
+    yaxis: { title: 'Leverage (\u03BB)', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  // ── Panel 5: Network & Fitness ──
+
+  Plotly.newPlot('chart-fitness', [
+    { x: t, y: data.fitness, name: 'Avg \u03A6',
+      line: { color: C.green, width: 2 },
+      hovertemplate: 't=%{x}<br>\u03A6 = %{y:.4f}<extra></extra>' },
+  ], mkLayout('Average Fitness \u03A6 = E/E\u2098\u2090\u2093 (eq. 9)', {
+    yaxis: { title: 'Fitness', gridcolor: '#eee' },
+  }), PLOT_CFG);
+
+  Plotly.newPlot('chart-participants', [
+    { x: t, y: data.num_banks,        name: 'Total Banks',      line: { color: C.slate, width: 2 } },
+    { x: t, y: data.active_lenders,   name: 'Active Lenders',   line: { color: C.blue, width: 2 } },
+    { x: t, y: data.active_borrowers, name: 'Active Borrowers', line: { color: C.orange, width: 2 } },
+  ], mkLayout('Market Participants', {
+    yaxis: { title: 'Count', gridcolor: '#eee', dtick: 1 },
+  }), PLOT_CFG);
+
+  // Boltzmann switching probability (conditional)
+  const switchDiv = document.getElementById('chart-switching');
+  if (data.has_boltzmann && data.P) {
+    switchDiv.style.display = 'block';
+    Plotly.newPlot('chart-switching', [
+      { x: t, y: data.P_max, name: 'P max', line: { width: 0 }, showlegend: false },
+      { x: t, y: data.P_min, name: 'P range', fill: 'tonexty',
+        fillcolor: 'rgba(37,99,235,0.12)', line: { width: 0 } },
+      { x: t, y: data.P, name: 'Avg P',
+        line: { color: C.blue, width: 2 },
+        hovertemplate: 't=%{x}<br>P = %{y:.4f}<extra></extra>' },
+    ], mkLayout('Boltzmann Switching Probability P (eq. 10)', {
+      yaxis: { title: 'Probability', range: [0, 1], gridcolor: '#eee' },
+    }), PLOT_CFG);
+  } else {
+    switchDiv.style.display = 'none';
+  }
+}
+
+// Slider event
+document.getElementById('scatter-slider').addEventListener('input', function() {
+  renderTBTFScatter(parseInt(this.value));
+});
+
+async function runSimulation() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  btn.textContent = 'Running\u2026';
+  setStatus('Simulation in progress\u2026', false);
+
+  const params = {
+    N:                 parseFloat(document.getElementById('p-N').value),
+    T:                 parseFloat(document.getElementById('p-T').value),
+    seed:              parseFloat(document.getElementById('p-seed').value),
+    algorithm:         document.getElementById('p-algorithm').value,
+    lc_p:              parseFloat(document.getElementById('p-lc_p').value),
+    lc_m:              parseInt(document.getElementById('p-lc_m').value),
+    // TBTF
+    fiscal_regime:     document.getElementById('p-fiscal_regime').value,
+    fund_levy_rate:    parseFloat(document.getElementById('p-fund_levy_rate').value),
+    fund_initial_balance: parseFloat(document.getElementById('p-fund_initial_balance').value),
+    gamma_capital:     parseFloat(document.getElementById('p-gamma_capital').value),
+    eta_bailout:       parseFloat(document.getElementById('p-eta_bailout').value),
+    alpha_collateral:  parseFloat(document.getElementById('p-alpha_collateral').value),
+    // Screening
+    phi:               parseFloat(document.getElementById('p-phi').value),
+    chi:               parseFloat(document.getElementById('p-chi').value),
+    // Recovery & switching
+    rho:               parseFloat(document.getElementById('p-rho').value),
+    beta:              parseFloat(document.getElementById('p-beta').value),
+    alfa:              parseFloat(document.getElementById('p-alfa').value),
+    // Shocks
+    mu:                parseFloat(document.getElementById('p-mu').value),
+    omega:             parseFloat(document.getElementById('p-omega').value),
+  };
+
+  try {
+    const resp = await fetch('/api/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      setStatus('Error: ' + data.error, true);
+      btn.disabled = false;
+      btn.textContent = 'Run Simulation';
+      return;
+    }
+
+    // Network graph
+    if (data.network) {
+      const img = document.getElementById('network-img');
+      img.src = 'data:image/png;base64,' + data.network;
+      img.style.display = 'block';
+      document.getElementById('network-placeholder').style.display = 'none';
+    }
+
+    showPanels();
+    renderCharts(data);
+
+    setStatus(`Done \u2014 ${data.time.length} periods simulated`, false);
+
+  } catch (err) {
+    setStatus('Request failed: ' + err.message, true);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Simulation';
+}
+</script>
+</body>
+</html>

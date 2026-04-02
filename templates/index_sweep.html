@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interbank ABM — Parameter Sweep</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5; color: #333;
+  }
+
+  /* Top bar: sweep setup + run button */
+  .topbar {
+    background: #fff; border-bottom: 2px solid #7c3aed;
+    padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar h1 {
+    font-size: 17px; color: #1a1a2e; white-space: nowrap;
+  }
+  .topbar h1 .badge {
+    font-size: 10px; color: #7c3aed; background: #f0e6ff;
+    padding: 1px 6px; border-radius: 3px; margin-left: 4px; vertical-align: middle;
+  }
+  .sweep-controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .sweep-controls label { font-size: 12px; color: #555; }
+  .sweep-controls select, .sweep-controls input {
+    padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px;
+  }
+  .sweep-controls select { width: 160px; }
+  .sweep-controls input { width: 65px; text-align: right; }
+  .sweep-controls .sep { color: #ccc; }
+  #btn-run {
+    padding: 7px 20px; background: #7c3aed; color: #fff;
+    border: none; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  #btn-run:hover { background: #6d28d9; }
+  #btn-run:disabled { background: #b4a0e5; cursor: wait; }
+  #status { font-size: 11px; color: #888; min-width: 120px; }
+  #status.error { color: #dc2626; }
+  #progress-bar {
+    height: 3px; background: #e0e0e0; border-radius: 2px; margin-top: 2px;
+  }
+  #progress-fill {
+    height: 100%; background: #7c3aed; width: 0%; transition: width 0.3s;
+  }
+
+  /* Parameter grid */
+  .params-area {
+    padding: 10px 20px; background: #fff; border-bottom: 1px solid #e0e0e0;
+  }
+  .params-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0 20px;
+  }
+  .param-section h3 {
+    font-size: 11px; color: #7c3aed; text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 6px 0 2px; padding-bottom: 2px; border-bottom: 1px solid #f0e6ff;
+  }
+  .p-row {
+    display: flex; align-items: center; padding: 1px 0; gap: 4px;
+  }
+  .p-row label { flex: 1; font-size: 11px; color: #555; white-space: nowrap; }
+  .p-row label .sym { font-weight: 600; color: #1a1a2e; margin-right: 2px; }
+  .p-row input, .p-row select {
+    width: 80px; padding: 2px 4px; border: 1px solid #ccc;
+    border-radius: 3px; font-size: 11px; text-align: right;
+  }
+  .p-row select { text-align: left; width: 110px; }
+  .p-row.swept input {
+    background: #f0e6ff; border-color: #7c3aed; color: #7c3aed;
+    cursor: not-allowed; opacity: 0.6;
+  }
+  .p-row.swept label { color: #7c3aed; font-style: italic; }
+
+  /* Metrics checkboxes — inline */
+  .metrics-bar {
+    padding: 6px 20px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .metrics-bar span.title { font-size: 11px; font-weight: 600; color: #555; white-space: nowrap; }
+  .metrics-bar label {
+    font-size: 11px; color: #555; display: flex; align-items: center; gap: 3px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .metrics-bar label:hover { color: #1a1a2e; }
+  .metrics-bar input[type="checkbox"] { accent-color: #7c3aed; }
+
+  /* Main results area */
+  .main { padding: 16px 20px; }
+  .panel {
+    background: #fff; border-radius: 8px; padding: 16px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .panel h2 {
+    font-size: 15px; color: #5b21b6; margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 2px solid #7c3aed;
+  }
+  #chart-sweep { min-height: 500px; }
+  #data-table {
+    width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px;
+  }
+  #data-table th, #data-table td {
+    padding: 6px 10px; border: 1px solid #e0e0e0; text-align: right;
+  }
+  #data-table th { background: #f8f9fa; font-weight: 600; text-align: center; }
+  #data-table td:first-child { font-weight: 600; text-align: center; }
+  .placeholder {
+    color: #aaa; font-size: 13px; text-align: center; padding: 80px 0;
+  }
+  .panel-header {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .panel-header h2 { flex: 1; }
+  #btn-save {
+    padding: 4px 14px; background: #fff; color: #7c3aed;
+    border: 1.5px solid #7c3aed; border-radius: 5px; font-size: 12px;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  #btn-save:hover { background: #f0e6ff; }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR: sweep config + run -->
+<div class="topbar">
+  <h1>Parameter Sweep <span class="badge">TBTF</span></h1>
+  <div class="sweep-controls">
+    <label>Sweep</label>
+    <select id="sweep-param" onchange="onSweepParamChange()">
+      {% for key, p in sweep_params.items() %}
+      <option value="{{ key }}" {% if key == 'eta_bailout' %}selected{% endif %}>{{ p.label }}</option>
+      {% endfor %}
+    </select>
+    <label>from</label>
+    <input id="sweep-from" type="number" value="0" step="0.05">
+    <label>to</label>
+    <input id="sweep-to" type="number" value="0.95" step="0.05">
+    <label>step</label>
+    <input id="sweep-step" type="number" value="0.1" step="0.01">
+    <span class="sep">|</span>
+    <label style="cursor:pointer"><input type="checkbox" id="mc-enabled" onchange="onMcToggle()" style="accent-color:#7c3aed"> MC Averaging</label>
+    <span id="mc-seeds-wrap" style="display:none">
+      <label>Seeds</label>
+      <input id="mc-seeds" type="number" value="20" min="2" max="100" step="1">
+    </span>
+    <span class="sep">|</span>
+    <label>Workers</label>
+    <input id="workers" type="number" value="6" min="1" max="12" step="1" style="width:45px">
+    <span class="sep">|</span>
+    <button id="btn-run" onclick="runSweep()">Run Sweep</button>
+    <span id="status"></span>
+  </div>
+  <div style="width:100%"><div id="progress-bar"><div id="progress-fill"></div></div></div>
+</div>
+
+<!-- METRICS BAR -->
+<div class="metrics-bar">
+  <span class="title">Metrics:</span>
+  {% for key, m in output_metrics.items() %}
+  <label>
+    <input type="checkbox" value="{{ key }}"
+      {% if key in ['bankruptcy', 'tax_induced_failures'] %}checked{% endif %}>
+    {{ m.label }}
+  </label>
+  {% endfor %}
+</div>
+
+<!-- PARAMETERS — 4-column grid -->
+<div class="params-area">
+  <div class="params-grid">
+
+    <!-- Column 1: Simulation -->
+    <div class="param-section">
+      <h3>Simulation</h3>
+      <div class="p-row" data-param="N">
+        <label><span class="sym">N</span> Banks</label>
+        <input id="p-N" type="number" value="50" min="2" max="200" step="1">
+      </div>
+      <div class="p-row">
+        <label><span class="sym">T</span> Periods</label>
+        <input id="p-T" type="number" value="1000" min="10" max="5000" step="10">
+      </div>
+      <div class="p-row">
+        <label>Seed</label>
+        <input id="p-seed" type="number" value="26462" min="0" step="1">
+      </div>
+      <div class="p-row">
+        <label>Algorithm</label>
+        <select id="p-algorithm">
+          <option value="Boltzmann" selected>Boltzmann</option>
+          <option value="Preferential">Preferential</option>
+          <option value="RestrictedMarket">RestrictedMarket</option>
+        </select>
+      </div>
+      <div class="p-row">
+        <label><span class="sym">p</span> Attach. prob.</label>
+        <input id="p-lc_p" type="number" value="0.5" min="0" max="1" step="0.05">
+      </div>
+      <div class="p-row">
+        <label><span class="sym">m</span> Graph degree</label>
+        <input id="p-lc_m" type="number" value="1" min="1" step="1">
+      </div>
+    </div>
+
+    <!-- Column 2: TBTF -->
+    <div class="param-section">
+      <h3>TBTF / Bailout</h3>
+      <div class="p-row">
+        <label>Fiscal Regime</label>
+        <select id="p-fiscal_regime" onchange="toggleFiscalParams()">
+          <option value="socialized_tax" selected>Socialized Tax</option>
+          <option value="none">No Fiscal Cost</option>
+          <option value="resolution_fund">Resolution Fund</option>
+        </select>
+      </div>
+      <div id="fund-params" style="display:none">
+        <div class="p-row" data-param="fund_levy_rate">
+          <label><span class="sym">&tau;<sub>fund</sub></span> Levy rate</label>
+          <input id="p-fund_levy_rate" type="number" value="0.005" min="0" max="0.05" step="0.001">
+        </div>
+        <div class="p-row">
+          <label>Fund initial balance</label>
+          <input id="p-fund_initial_balance" type="number" value="0" min="0" step="1">
+        </div>
+      </div>
+      <div class="p-row" data-param="gamma_capital">
+        <label><span class="sym">&gamma;</span> Capital adequacy</label>
+        <input id="p-gamma_capital" type="number" value="0.10" min="0" max="1" step="0.01">
+      </div>
+      <div class="p-row" data-param="eta_bailout">
+        <label><span class="sym">&eta;</span> Bailout recovery</label>
+        <input id="p-eta_bailout" type="number" value="0.85" min="0" max="1" step="0.01">
+      </div>
+      <div class="p-row" data-param="alpha_collateral">
+        <label><span class="sym">&alpha;</span> Pricing recovery (eqs 4,6,8)</label>
+        <input id="p-alpha_collateral" type="number" value="0.05" min="0" max="1" step="0.01">
+      </div>
+      <h3>Screening Costs</h3>
+      <div class="p-row" data-param="phi">
+        <label><span class="sym">&phi;</span> Lender screening</label>
+        <input id="p-phi" type="number" value="0.025" min="0" step="0.001">
+      </div>
+      <div class="p-row" data-param="chi">
+        <label><span class="sym">&chi;</span> Borrower screening</label>
+        <input id="p-chi" type="number" value="0.015" min="0" step="0.001">
+      </div>
+    </div>
+
+    <!-- Column 3: Recovery & Switching -->
+    <div class="param-section">
+      <h3>Recovery &amp; Switching</h3>
+      <div class="p-row" data-param="rho">
+        <label><span class="sym">&rho;</span> Fire sale / resolution cost</label>
+        <input id="p-rho" type="number" value="0.3" min="0" max="1" step="0.01">
+      </div>
+      <div class="p-row" data-param="beta">
+        <label><span class="sym">&beta;</span> Boltzmann intensity</label>
+        <input id="p-beta" type="number" value="5" min="0" step="0.1">
+      </div>
+      <div class="p-row" data-param="alfa">
+        <label><span class="sym">&alpha;<sub>BT</sub></span> Bankruptcy threshold</label>
+        <input id="p-alfa" type="number" value="0.1" min="0" step="0.01">
+      </div>
+    </div>
+
+    <!-- Column 4: Shocks -->
+    <div class="param-section">
+      <h3>Shocks</h3>
+      <div class="p-row" data-param="mu">
+        <label><span class="sym">&mu;</span> Shock mean</label>
+        <input id="p-mu" type="number" value="0.7" min="0" step="0.01">
+      </div>
+      <div class="p-row" data-param="omega">
+        <label><span class="sym">&omega;</span> Shock dispersion</label>
+        <input id="p-omega" type="number" value="0.5" min="0" step="0.01">
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- RESULTS -->
+<div class="main">
+  <div class="panel" id="panel-chart">
+    <div class="panel-header">
+      <h2 id="chart-title">Parameter Sweep Results</h2>
+      <button id="btn-save" style="display:none" onclick="saveResults()">Save Results</button>
+    </div>
+    <div class="placeholder" id="chart-placeholder">Configure a sweep and click "Run Sweep"</div>
+    <div id="chart-sweep" style="display:none"></div>
+  </div>
+
+  <div class="panel" id="panel-table" style="display:none">
+    <h2>Data Table</h2>
+    <table id="data-table"></table>
+  </div>
+</div>
+
+<script>
+// Sweep parameter definitions (from server)
+const SWEEP_PARAMS = {{ sweep_params | tojson }};
+const OUTPUT_METRICS = {{ output_metrics | tojson }};
+let lastResults = null;
+
+function onMcToggle() {
+  const on = document.getElementById('mc-enabled').checked;
+  document.getElementById('mc-seeds-wrap').style.display = on ? '' : 'none';
+  // Gray out / restore seed input using the existing .swept pattern
+  const seedRow = document.getElementById('p-seed').closest('.p-row');
+  if (on) {
+    seedRow.classList.add('swept');
+    document.getElementById('p-seed').disabled = true;
+  } else {
+    seedRow.classList.remove('swept');
+    document.getElementById('p-seed').disabled = false;
+  }
+}
+
+function onSweepParamChange() {
+  const key = document.getElementById('sweep-param').value;
+  const info = SWEEP_PARAMS[key];
+  if (info && info.defaults) {
+    document.getElementById('sweep-from').value = info.defaults[0];
+    document.getElementById('sweep-to').value = info.defaults[1];
+    document.getElementById('sweep-step').value = info.defaults[2];
+  }
+  // Gray out the swept parameter in the params grid
+  // (preserve seed row swept state from MC toggle)
+  const seedRow = document.getElementById('p-seed').closest('.p-row');
+  document.querySelectorAll('.p-row.swept').forEach(el => {
+    if (el === seedRow) return; // don't touch seed row — managed by onMcToggle
+    el.classList.remove('swept');
+    el.querySelector('input').disabled = false;
+  });
+  const row = document.querySelector(`.p-row[data-param="${key}"]`);
+  if (row) {
+    row.classList.add('swept');
+    row.querySelector('input').disabled = true;
+  }
+}
+
+function toggleFiscalParams() {
+  const regime = document.getElementById('p-fiscal_regime').value;
+  document.getElementById('fund-params').style.display =
+    regime === 'resolution_fund' ? '' : 'none';
+}
+
+async function runSweep() {
+  const btn = document.getElementById('btn-run');
+  const status = document.getElementById('status');
+  const fill = document.getElementById('progress-fill');
+  btn.disabled = true;
+  status.className = '';
+  status.textContent = 'Starting...';
+  fill.style.width = '0%';
+
+  // MC settings
+  const mcEnabled = document.getElementById('mc-enabled').checked;
+  const mcSeeds = parseInt(document.getElementById('mc-seeds').value) || 20;
+
+  // Gather fixed params
+  const cfg = {};
+  const floatKeys = ['gamma_capital','eta_bailout','alpha_collateral','phi','chi',
+                     'rho','beta','alfa','mu','omega','lc_p',
+                     'fund_levy_rate','fund_initial_balance'];
+  const intKeys = ['N','T','seed','lc_m'];
+
+  floatKeys.forEach(k => {
+    const el = document.getElementById('p-' + k);
+    if (el && !el.disabled) cfg[k] = parseFloat(el.value);
+  });
+  intKeys.forEach(k => {
+    const el = document.getElementById('p-' + k);
+    // Always read seed (used as base_seed for MC), even when disabled
+    if (el && (!el.disabled || k === 'seed')) cfg[k] = parseInt(el.value);
+  });
+  cfg.algorithm = document.getElementById('p-algorithm').value;
+  cfg.fiscal_regime = document.getElementById('p-fiscal_regime').value;
+
+  // Sweep config
+  const sweepParam = document.getElementById('sweep-param').value;
+  const from = parseFloat(document.getElementById('sweep-from').value);
+  const to = parseFloat(document.getElementById('sweep-to').value);
+  const step = parseFloat(document.getElementById('sweep-step').value);
+
+  // Selected metrics
+  const metrics = [];
+  document.querySelectorAll('.metrics-bar input[type="checkbox"]:checked').forEach(cb => {
+    metrics.push(cb.value);
+  });
+  if (metrics.length === 0) {
+    status.className = 'error';
+    status.textContent = 'Select at least one metric';
+    btn.disabled = false;
+    return;
+  }
+
+  // Generate sweep values
+  const values = [];
+  for (let v = from; v <= to + step * 0.01; v += step) {
+    values.push(Math.round(v * 10000) / 10000);
+  }
+
+  const totalRuns = mcEnabled ? values.length * mcSeeds : values.length;
+  status.textContent = `Running ${totalRuns} simulations...`;
+
+  try {
+    const resp = await fetch('/api/sweep', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        sweep_param: sweepParam,
+        sweep_values: values,
+        config: cfg,
+        metrics: metrics,
+        mc_enabled: mcEnabled,
+        mc_seeds: mcSeeds,
+        workers: parseInt(document.getElementById('workers').value) || 6
+      })
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let results = null;
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      // Process SSE-like lines
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            const pct = Math.round(msg.done / msg.total * 100);
+            fill.style.width = pct + '%';
+            status.textContent = `${msg.status} (${msg.done}/${msg.total})`;
+          } else if (msg.type === 'result') {
+            results = msg;
+          } else if (msg.type === 'error') {
+            throw new Error(msg.message);
+          }
+        } catch(e) {
+          if (e.message !== 'Unexpected end of JSON input') throw e;
+        }
+      }
+    }
+
+    if (results) {
+      plotResults(results, sweepParam, metrics, mcEnabled);
+      buildTable(results, sweepParam, metrics, mcEnabled);
+      lastResults = { data: results, sweepParam, metrics };
+      document.getElementById('btn-save').style.display = '';
+      const label = mcEnabled ? `${values.length} values x ${mcSeeds} seeds = ${totalRuns} runs` : `${values.length} runs`;
+      status.textContent = `Done — ${label}`;
+      fill.style.width = '100%';
+    }
+  } catch(e) {
+    status.className = 'error';
+    status.textContent = 'Error: ' + e.message;
+    console.error(e);
+  }
+  btn.disabled = false;
+}
+
+function plotResults(data, sweepParam, metrics, mcEnabled) {
+  const container = document.getElementById('chart-sweep');
+  const placeholder = document.getElementById('chart-placeholder');
+  container.style.display = 'block';
+  if (placeholder) placeholder.style.display = 'none';
+
+  const paramInfo = SWEEP_PARAMS[sweepParam];
+  const xLabel = paramInfo ? paramInfo.label : sweepParam;
+  const isMC = data.mc === true;
+
+  const COLORS = [
+    '#dc2626','#2563eb','#059669','#d97706','#7c3aed',
+    '#db2777','#0891b2','#64748b','#ea580c','#4f46e5'
+  ];
+
+  const traces = [];
+  const yAxes = {};
+  let axisNum = 0;
+
+  metrics.forEach((key, i) => {
+    const mInfo = OUTPUT_METRICS[key];
+    const color = COLORS[i % COLORS.length];
+    axisNum++;
+    const yAxisName = axisNum === 1 ? 'y' : 'y' + axisNum;
+
+    if (isMC) {
+      const means = data.values.map(r => r[key].mean);
+      const stds  = data.values.map(r => r[key].std);
+      const upper = means.map((m, j) => m + stds[j]);
+      const lower = means.map((m, j) => m - stds[j]);
+
+      // Upper bound (invisible line)
+      traces.push({
+        x: data.sweep_values, y: upper,
+        mode: 'lines', line: { width: 0 },
+        showlegend: false, yaxis: yAxisName, hoverinfo: 'skip'
+      });
+      // Lower bound with fill to upper
+      traces.push({
+        x: data.sweep_values, y: lower,
+        mode: 'lines', line: { width: 0 },
+        fill: 'tonexty', fillcolor: hexToRgba(color, 0.15),
+        showlegend: false, yaxis: yAxisName, hoverinfo: 'skip'
+      });
+      // Mean line
+      traces.push({
+        x: data.sweep_values, y: means,
+        name: (mInfo ? mInfo.label : key) + ' (mean)',
+        type: 'scatter', mode: 'lines+markers',
+        yaxis: yAxisName,
+        line: { width: 2, color: color },
+        marker: { size: 6, color: color }
+      });
+    } else {
+      const yVals = data.values.map(r => r[key]);
+      traces.push({
+        x: data.sweep_values, y: yVals,
+        name: mInfo ? mInfo.label : key,
+        type: 'scatter', mode: 'lines+markers',
+        yaxis: yAxisName,
+        line: { width: 2, color: color },
+        marker: { size: 6, color: color }
+      });
+    }
+
+    const side = (axisNum % 2 === 1) ? 'left' : 'right';
+    const overlaying = axisNum > 1 ? 'y' : undefined;
+    yAxes['yaxis' + (axisNum === 1 ? '' : axisNum)] = {
+      title: mInfo ? mInfo.label : key,
+      side: side,
+      overlaying: overlaying,
+      showgrid: axisNum === 1,
+    };
+  });
+
+  const titleSuffix = isMC ? ` (MC ${data.mc_seeds} seeds)` : '';
+  const layout = {
+    title: `Sweep: ${xLabel}${titleSuffix}`,
+    xaxis: { title: xLabel },
+    ...yAxes,
+    legend: { orientation: 'h', y: -0.15 },
+    margin: { l: 60, r: 60, t: 50, b: 80 },
+    hovermode: 'x unified'
+  };
+
+  Plotly.newPlot(container, traces, layout, {responsive: true});
+  document.getElementById('chart-title').textContent =
+    `Sweep: ${xLabel} — ${data.sweep_values.length} values${titleSuffix}`;
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function buildTable(data, sweepParam, metrics, mcEnabled) {
+  const panel = document.getElementById('panel-table');
+  const table = document.getElementById('data-table');
+  panel.style.display = 'block';
+
+  const paramInfo = SWEEP_PARAMS[sweepParam];
+  const xLabel = paramInfo ? paramInfo.label : sweepParam;
+  const isMC = data.mc === true;
+
+  let html = '<thead><tr><th rowspan="' + (isMC ? 2 : 1) + '">' + xLabel + '</th>';
+  if (isMC) {
+    metrics.forEach(k => {
+      const m = OUTPUT_METRICS[k];
+      html += '<th colspan="4">' + (m ? m.label : k) + '</th>';
+    });
+    html += '</tr><tr>';
+    metrics.forEach(() => {
+      html += '<th>Mean</th><th>Std</th><th>Min</th><th>Max</th>';
+    });
+  } else {
+    metrics.forEach(k => {
+      const m = OUTPUT_METRICS[k];
+      html += '<th>' + (m ? m.label : k) + '</th>';
+    });
+  }
+  html += '</tr></thead><tbody>';
+
+  const fmt = v => typeof v === 'number' ? v.toLocaleString(undefined, {maximumFractionDigits: 2}) : v;
+
+  data.sweep_values.forEach((sv, i) => {
+    html += '<tr><td>' + sv + '</td>';
+    metrics.forEach(k => {
+      if (isMC) {
+        const a = data.values[i][k];
+        html += '<td>' + fmt(a.mean) + '</td><td>' + fmt(a.std) + '</td>'
+              + '<td>' + fmt(a.min) + '</td><td>' + fmt(a.max) + '</td>';
+      } else {
+        html += '<td>' + fmt(data.values[i][k]) + '</td>';
+      }
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+async function saveResults() {
+  if (!lastResults) return;
+  const name = prompt('Enter a name for the export files:');
+  if (!name) return;
+
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const { data, sweepParam, metrics } = lastResults;
+  const isMC = data.mc === true;
+  const paramInfo = SWEEP_PARAMS[sweepParam];
+  const xLabel = paramInfo ? paramInfo.label : sweepParam;
+
+  // ── PNG: get base64 from Plotly ──
+  const pngDataUrl = await Plotly.toImage('chart-sweep', {
+    format: 'png', width: 1200, height: 600
+  });
+  const pngB64 = pngDataUrl.split(',')[1]; // strip "data:image/png;base64,"
+
+  // ── CSV ──
+  const rows = [];
+  const hdr = [xLabel];
+  metrics.forEach(k => {
+    const label = OUTPUT_METRICS[k] ? OUTPUT_METRICS[k].label : k;
+    if (isMC) {
+      hdr.push(label + '_mean', label + '_std', label + '_min', label + '_max');
+    } else {
+      hdr.push(label);
+    }
+  });
+  rows.push(hdr.join(','));
+
+  data.sweep_values.forEach((sv, i) => {
+    const row = [sv];
+    metrics.forEach(k => {
+      if (isMC) {
+        const a = data.values[i][k];
+        row.push(a.mean, a.std, a.min, a.max);
+      } else {
+        row.push(data.values[i][k]);
+      }
+    });
+    rows.push(row.join(','));
+  });
+  const csv = rows.join('\n');
+
+  // ── Send to server ──
+  try {
+    const resp = await fetch('/api/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, png: pngB64, csv })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      btn.textContent = 'Saved!';
+      setTimeout(() => { btn.textContent = 'Save Results'; btn.disabled = false; }, 2000);
+    } else {
+      throw new Error(result.error);
+    }
+  } catch(e) {
+    alert('Save failed: ' + e.message);
+    btn.textContent = 'Save Results';
+    btn.disabled = false;
+  }
+}
+
+// Initialize gray-out on load
+document.addEventListener('DOMContentLoaded', onSweepParamChange);
+</script>
+</body>
+</html>
