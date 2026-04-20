@@ -113,17 +113,23 @@ def safe_list(arr, length):
 
 
 def extract_metric(stats, name, T):
-    """Extract a single scalar from a statistics array."""
+    """Extract a single scalar from a statistics array.
+    Always returns a finite float (NaN/Inf → 0.0) so json.dumps never fails.
+    """
     arr = getattr(stats, name, None)
     if arr is None:
         return 0.0
-    if name in LAST_METRICS:
-        return float(arr[T - 1]) if T > 0 else 0.0
-    elif name in SUM_METRICS:
-        return float(np.nansum(arr[:T]))
-    else:
-        tail = max(0, T - 100)
-        return float(np.nanmean(arr[tail:T]))
+    try:
+        if name in LAST_METRICS:
+            v = float(arr[T - 1]) if T > 0 else 0.0
+        elif name in SUM_METRICS:
+            v = float(np.nansum(arr[:T]))
+        else:
+            tail = max(0, T - 100)
+            v = float(np.nanmean(arr[tail:T]))
+    except Exception:
+        return 0.0
+    return v if math.isfinite(v) else 0.0
 
 
 def _build_config(params):
@@ -310,10 +316,18 @@ def _run_single(args):
 
 
 def _run_single_sweep(args):
-    """Run one simulation for a sweep job. Returns (sweep_val, seed, metrics_row)."""
-    cfg_base, sweep_key, val, seed, algorithm, lc_p, lc_m, metrics = args
+    """Run one simulation for a sweep job. Returns (sweep_val, seed, metrics_row).
+    Accepts an optional 9th element: extra_params dict of additional config overrides
+    (used by correlated-path multi-sweep to set a second parameter alongside the main one).
+    """
+    if len(args) == 9:
+        cfg_base, sweep_key, val, seed, algorithm, lc_p, lc_m, metrics, extra_params = args
+    else:
+        cfg_base, sweep_key, val, seed, algorithm, lc_p, lc_m, metrics = args
+        extra_params = {}
     cfg = dict(cfg_base)
     cfg[sweep_key] = val
+    cfg.update(extra_params)
     if 'N' in cfg:
         cfg['N'] = int(cfg['N'])
     if 'T' in cfg:
@@ -324,6 +338,27 @@ def _run_single_sweep(args):
     for m in metrics:
         row[m] = extract_metric(model.statistics, m, T)
     return (val, seed, row)
+
+
+def _run_grid_sweep(args):
+    """Run one simulation for a 2-parameter grid sweep.
+    Returns (i, j, seed, metrics_row) where (i, j) are the grid indices —
+    safe to use regardless of as_completed() execution order.
+    """
+    cfg_base, sweep_key1, val1, i, sweep_key2, val2, j, seed, algorithm, lc_p, lc_m, metrics = args
+    cfg = dict(cfg_base)
+    cfg[sweep_key1] = val1
+    cfg[sweep_key2] = val2
+    if 'N' in cfg:
+        cfg['N'] = int(cfg['N'])
+    if 'T' in cfg:
+        cfg['T'] = int(cfg['T'])
+    model = _create_and_run_model(cfg, seed, algorithm, lc_p, lc_m)
+    T = model.t
+    row = {}
+    for m in metrics:
+        row[m] = extract_metric(model.statistics, m, T)
+    return (i, j, seed, row)
 
 
 # ── Routes ──
@@ -434,6 +469,147 @@ def api_sweep():
 
         # Build seeds list
         seeds = [base_seed + s for s in range(mc)]
+
+        # ── Multi-sweep mode detection ──
+        sweep_mode = body.get('sweep_mode', 'single')
+        sweep_key2 = body.get('sweep_param2')
+
+        def _parse_sweep_values2():
+            """Parse the second parameter's value array from the request body."""
+            if 'sweep_values2' in body:
+                return [float(v) for v in body['sweep_values2']]
+            f2, t2, s2 = float(body['from2']), float(body['to2']), float(body['step2'])
+            arr, v = [], f2
+            sign = 1 if s2 > 0 else -1
+            while sign * v <= sign * t2 + abs(s2) * 0.01:
+                arr.append(round(v, 10))
+                v += s2
+            return arr
+
+        if sweep_mode == 'grid' and sweep_key2:
+            sweep_values2 = _parse_sweep_values2()
+            cfg_base.pop(sweep_key2, None)  # ensure second swept param is not fixed
+
+            def generate():
+                jobs = []
+                for i, val1 in enumerate(sweep_values):
+                    for j, val2 in enumerate(sweep_values2):
+                        for seed in seeds:
+                            jobs.append((cfg_base, sweep_key, val1, i,
+                                         sweep_key2, val2, j, seed,
+                                         algorithm, lc_p, lc_m, metrics))
+                total = len(jobs)
+                actual_workers = min(workers, total)
+                done_count = 0
+                all_results = []
+                with ProcessPoolExecutor(max_workers=actual_workers) as pool:
+                    futures = {pool.submit(_run_grid_sweep, job): job for job in jobs}
+                    for future in as_completed(futures):
+                        gi, gj, gseed, grow = future.result()
+                        all_results.append((gi, gj, gseed, grow))
+                        done_count += 1
+                        yield json.dumps({
+                            'type': 'progress', 'done': done_count, 'total': total,
+                            'status': f'{sweep_key}[{gi}]×{sweep_key2}[{gj}]',
+                        }) + '\n'
+
+                try:
+                    n1, n2 = len(sweep_values), len(sweep_values2)
+                    matrix = {m: [[0.0] * n2 for _ in range(n1)] for m in metrics}
+                    if mc <= 1:
+                        for gi, gj, gseed, grow in all_results:
+                            for m in metrics:
+                                v = grow.get(m, 0.0)
+                                matrix[m][gi][gj] = v if math.isfinite(v) else 0.0
+                    else:
+                        matrix_std = {m: [[0.0] * n2 for _ in range(n1)] for m in metrics}
+                        by_ij = defaultdict(list)
+                        for gi, gj, gseed, grow in all_results:
+                            by_ij[(gi, gj)].append(grow)
+                        for (gi, gj), rows in by_ij.items():
+                            for m in metrics:
+                                vals = [r.get(m, 0.0) for r in rows]
+                                v = float(np.mean(vals))
+                                matrix[m][gi][gj] = v if math.isfinite(v) else 0.0
+                                s = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
+                                matrix_std[m][gi][gj] = s if math.isfinite(s) else 0.0
+
+                    result_dict = {
+                        'type': 'result', 'mode': 'grid', 'mc': mc > 1,
+                        'sweep_values': sweep_values, 'sweep_values2': sweep_values2,
+                        'param1': sweep_key, 'param2': sweep_key2,
+                        'matrix': matrix,
+                    }
+                    if mc > 1:
+                        result_dict['matrix_std'] = matrix_std
+                    result_json = json.dumps(result_dict)
+                    yield result_json + '\n'
+                except Exception as e:
+                    traceback.print_exc()
+                    yield json.dumps({'type': 'error', 'message': f'Grid result assembly failed: {e}'}) + '\n'
+
+            return app.response_class(generate(), mimetype='text/plain')
+
+        elif sweep_mode == 'correlated' and sweep_key2:
+            sweep_values2 = _parse_sweep_values2()
+            # Match lengths: truncate to shorter (frontend should already ensure equal lengths,
+            # but guard here for safety)
+            min_len = min(len(sweep_values), len(sweep_values2))
+            sweep_values = sweep_values[:min_len]
+            sweep_values2 = sweep_values2[:min_len]
+            cfg_base.pop(sweep_key2, None)
+
+            def generate():
+                jobs = []
+                for val1, val2 in zip(sweep_values, sweep_values2):
+                    for seed in seeds:
+                        jobs.append((cfg_base, sweep_key, val1, seed,
+                                     algorithm, lc_p, lc_m, metrics,
+                                     {sweep_key2: val2}))
+                total = len(jobs)
+                actual_workers = min(workers, total)
+                done_count = 0
+                all_results = []
+                with ProcessPoolExecutor(max_workers=actual_workers) as pool:
+                    futures = {pool.submit(_run_single_sweep, job): job for job in jobs}
+                    for future in as_completed(futures):
+                        val, seed, row = future.result()
+                        all_results.append((val, seed, row))
+                        done_count += 1
+                        yield json.dumps({
+                            'type': 'progress', 'done': done_count, 'total': total,
+                            'status': f'{sweep_key}={val}',
+                        }) + '\n'
+
+                if mc <= 1:
+                    result_map = {val: row for val, seed, row in all_results}
+                    run_results = [result_map.get(val, {}) for val in sweep_values]
+                else:
+                    by_val = defaultdict(list)
+                    for val, seed, row in all_results:
+                        by_val[val].append(row)
+                    run_results = []
+                    for val in sweep_values:
+                        seed_rows = by_val[val]
+                        agg = {}
+                        for m in metrics:
+                            vals = [r[m] for r in seed_rows]
+                            agg[m] = {
+                                'mean': float(np.mean(vals)),
+                                'std':  float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
+                                'min':  float(np.min(vals)),
+                                'max':  float(np.max(vals)),
+                            }
+                        run_results.append(agg)
+
+                yield json.dumps({
+                    'type': 'result', 'mode': 'correlated', 'mc': mc > 1, 'mc_seeds': mc,
+                    'sweep_values': sweep_values, 'sweep_values2': sweep_values2,
+                    'param1': sweep_key, 'param2': sweep_key2,
+                    'values': run_results,
+                }) + '\n'
+
+            return app.response_class(generate(), mimetype='text/plain')
 
         def generate():
             # Build job list

@@ -45,3 +45,5 @@ gab.c
 graph_tests/*
 auxil/*
 *.txt
+*copia*
+beta comparison.html

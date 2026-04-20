@@ -71,7 +71,7 @@ class Config:
     phi: float = 0.025  # phi Φ
     chi: float = 0.015  # chi Χ
 
-    xi: float = 0.3  # xi ξ liquidation cost of collateral
+    xi: float = 0.3  # xi ξ liquidation cost of collateral OLD
     rho: float = 0.3  # rho ρ fire sale cost
 
     beta: float = 5  # β beta intensity of breaking the connection (5)

@@ -249,6 +249,7 @@
         <label><input type="radio" name="mode" value="single" checked onchange="switchMode(this.value)"> Single Run</label>
         <label><input type="radio" name="mode" value="sweep" onchange="switchMode(this.value)"> Parameter Sweep</label>
         <label><input type="radio" name="mode" value="compare" onchange="switchMode(this.value)"> Regime Comparison</label>
+        <label><input type="radio" name="mode" value="multi" onchange="switchMode(this.value)"> Multi-Sweep</label>
       </div>
 
       <!-- Sweep-specific controls -->
@@ -326,6 +327,95 @@
           <input id="compare-step" type="number" value="0.1" step="0.01" style="width:65px">
         </div>
       </div>
+
+      <!-- Multi-sweep controls -->
+      <div id="multi-sweep-opts" class="sweep-controls hidden">
+        <div style="font-size:11px;color:#888;margin:4px 0">Sub-mode:</div>
+        <div class="radio-group" style="margin-bottom:6px">
+          <label><input type="radio" name="multi-mode" value="correlated" checked onchange="onMultiModeChange()"> Correlated Path</label>
+          <label><input type="radio" name="multi-mode" value="grid" onchange="onMultiModeChange()"> Grid Sweep</label>
+        </div>
+        <div style="font-size:11px;font-weight:600;color:#555;margin:4px 0 2px">Parameter 1</div>
+        <div class="param-row">
+          <label>Param</label>
+          <select id="multi-param1" style="width:140px">
+            <option value="rho">&rho; Fire sale cost</option>
+            <option value="eta_bailout">&eta; Bailout recovery</option>
+            <option value="gamma_capital">&gamma; Capital adequacy</option>
+            <option value="alpha_collateral">&alpha; Pricing recovery</option>
+            <option value="beta">&beta; Boltzmann intensity</option>
+            <option value="mu">&mu; Shock mean</option>
+            <option value="omega">&omega; Shock dispersion</option>
+            <option value="fund_levy_rate">&tau; Fund levy rate</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>From</label>
+          <input id="multi-from1" type="number" value="0" step="0.05" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <div class="param-row">
+          <label>To</label>
+          <input id="multi-to1" type="number" value="0.9" step="0.05" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <div class="param-row">
+          <label>Step</label>
+          <input id="multi-step1" type="number" value="0.1" step="0.01" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <div style="font-size:11px;font-weight:600;color:#555;margin:8px 0 2px">Parameter 2</div>
+        <div class="param-row">
+          <label>Param</label>
+          <select id="multi-param2" style="width:140px">
+            <option value="eta_bailout">&eta; Bailout recovery</option>
+            <option value="rho">&rho; Fire sale cost</option>
+            <option value="gamma_capital">&gamma; Capital adequacy</option>
+            <option value="alpha_collateral">&alpha; Pricing recovery</option>
+            <option value="beta">&beta; Boltzmann intensity</option>
+            <option value="mu">&mu; Shock mean</option>
+            <option value="omega">&omega; Shock dispersion</option>
+            <option value="fund_levy_rate">&tau; Fund levy rate</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>From</label>
+          <input id="multi-from2" type="number" value="0.9" step="0.05" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <div class="param-row">
+          <label>To</label>
+          <input id="multi-to2" type="number" value="0" step="0.05" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <div class="param-row">
+          <label>Step</label>
+          <input id="multi-step2" type="number" value="-0.1" step="0.01" style="width:65px" oninput="updateMultiJobCount()">
+        </div>
+        <!-- Grid-only options -->
+        <div id="grid-plot-opts" class="hidden" style="margin-top:6px">
+          <div class="param-row">
+            <label>Metric</label>
+            <select id="grid-metric" style="width:140px">
+              {% for key, m in output_metrics.items() %}
+              <option value="{{ key }}" {% if key == 'bankruptcy' %}selected{% endif %}>{{ m.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="mc-controls">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0">
+            <input type="checkbox" id="multi-mc-enabled" onchange="toggleMultiMC()"> MC Averaging
+          </label>
+          <div id="multi-mc-opts" class="hidden">
+            <div class="param-row">
+              <label>Seeds</label>
+              <input id="multi-mc-seeds" type="number" value="10" min="2" max="100" style="width:65px" oninput="updateMultiJobCount()">
+            </div>
+          </div>
+        </div>
+        <div class="param-row">
+          <label>Workers</label>
+          <input id="multi-workers" type="number" value="6" min="1" max="12" style="width:65px">
+        </div>
+        <div id="multi-job-warning" style="font-size:11px;margin:4px 0;display:none"></div>
+      </div>
+
     </div>
   </div>
 
@@ -500,8 +590,66 @@
           <div id="chart-sweep-contagion" style="height:350px"></div>
         </div>
         <div class="chart-panel">
+          <h3>Metric Correlation Matrix</h3>
+          <div id="chart-sweep-corr" style="height:480px"></div>
+        </div>
+        <div class="chart-panel">
           <h3>Data Table</h3>
           <table class="data-table" id="sweep-table"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Multi-sweep results -->
+    <div id="multi-results" class="hidden">
+      <div class="placeholder" id="multi-placeholder">Configure a multi-sweep and click Run</div>
+      <div id="multi-charts" class="hidden">
+        <div class="chart-panel" id="multi-total-panel">
+          <h3 id="multi-total-title">Metrics along correlated path</h3>
+          <div id="chart-multi-total" style="height:400px"></div>
+        </div>
+        <div class="chart-panel" id="multi-grid-panel" style="display:none">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+            <h3 id="multi-grid-title" style="margin:0;flex:1;min-width:160px">Response Surface (3D)</h3>
+            <label style="font-size:12px;white-space:nowrap">Metric:
+              <select id="grid-display-metric" style="margin-left:4px" onchange="reRenderGridMetric()">
+                {% for key, m in output_metrics.items() %}
+                <option value="{{ key }}" {% if key == 'bankruptcy' %}selected{% endif %}>{{ m.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label id="grid-show-std-label" style="font-size:12px;white-space:nowrap;display:none">
+              <input type="checkbox" id="grid-show-std" onchange="reRenderGridMetric()"> Show Std
+            </label>
+            <span style="font-size:12px;color:#888">Paths:</span>
+            <label style="font-size:12px"><input type="checkbox" id="path-main-diag" onchange="reRenderGridMetric()"> Normal (↗)</label>
+            <label style="font-size:12px"><input type="checkbox" id="path-anti-diag" onchange="reRenderGridMetric()"> Inverse (↘)</label>
+            <span style="font-size:12px;color:#888">Flip:</span>
+            <label style="font-size:12px"><input type="checkbox" id="grid-flip-x" onchange="reRenderGridMetric()"> X</label>
+            <label style="font-size:12px"><input type="checkbox" id="grid-flip-y" onchange="reRenderGridMetric()"> Y</label>
+          </div>
+          <div id="chart-multi-grid" style="height:520px"></div>
+        </div>
+        <div class="chart-panel" id="multi-heatmap-panel" style="display:none">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+            <h3 id="multi-heatmap-title" style="margin:0;flex:1;min-width:160px">Response Surface (2D Heatmap)</h3>
+            <span style="font-size:12px;color:#888">Paths:</span>
+            <label style="font-size:12px"><input type="checkbox" id="path-main-diag-hm" onchange="reRenderGridMetric()"> Normal (↗)</label>
+            <label style="font-size:12px"><input type="checkbox" id="path-anti-diag-hm" onchange="reRenderGridMetric()"> Inverse (↘)</label>
+            <span style="font-size:12px;color:#888">Flip:</span>
+            <label style="font-size:12px"><input type="checkbox" id="grid-flip-x-hm" onchange="reRenderGridMetric()"> X</label>
+            <label style="font-size:12px"><input type="checkbox" id="grid-flip-y-hm" onchange="reRenderGridMetric()"> Y</label>
+          </div>
+          <div id="chart-multi-heatmap" style="height:450px"></div>
+        </div>
+        <div class="chart-panel" id="multi-decomp-panel">
+          <h3 id="multi-decomp-title">Bankruptcy Decomposition</h3>
+          <div id="chart-multi-decomp" style="height:450px"></div>
+        </div>
+        <div class="chart-panel" id="multi-table-panel">
+          <h3 id="multi-table-title">Data Table</h3>
+          <table class="data-table" id="multi-grid-table"></table>
+          <table class="data-table" id="multi-path-table"></table>
         </div>
       </div>
     </div>
@@ -691,6 +839,7 @@ var currentMode = 'single';
 var lastSingleData = null;
 var lastSweepData = null;
 var lastCompareData = null;
+var lastMultiData = null;
 
 /* ================================================================
    UI HELPERS
@@ -721,11 +870,15 @@ function switchMode(mode) {
   currentMode = mode;
   document.getElementById('sweep-opts').classList.toggle('hidden', mode !== 'sweep');
   document.getElementById('compare-opts').classList.toggle('hidden', mode !== 'compare');
+  document.getElementById('multi-sweep-opts').classList.toggle('hidden', mode !== 'multi');
   document.getElementById('fiscal-regime-row').classList.toggle('hidden', mode === 'compare');
   document.getElementById('single-results').classList.toggle('hidden', mode !== 'single');
   document.getElementById('sweep-results').classList.toggle('hidden', mode !== 'sweep');
   document.getElementById('compare-results').classList.toggle('hidden', mode !== 'compare');
-  document.getElementById('metrics-bar').style.display = (mode === 'sweep') ? '' : 'none';
+  document.getElementById('multi-results').classList.toggle('hidden', mode !== 'multi');
+  /* metrics-bar: show for sweep mode, and for multi/correlated; hide for multi/grid */
+  var showMetrics = (mode === 'sweep') || (mode === 'multi' && getMultiMode() === 'correlated');
+  document.getElementById('metrics-bar').style.display = showMetrics ? '' : 'none';
   /* Network tab: hide in non-single modes */
   var networkBtn = document.getElementById('tab-btn-network');
   if (mode === 'single') {
@@ -738,6 +891,8 @@ function switchMode(mode) {
   if (mode === 'sweep') { onSweepParamChange(); } else { clearSweptState(); }
   /* Hide save button on mode switch */
   document.getElementById('btn-save').style.display = 'none';
+  /* Update multi job count if switching to multi */
+  if (mode === 'multi') { updateMultiJobCount(); }
 }
 
 function clearSweptState() {
@@ -797,6 +952,11 @@ function getSelectedMetrics() {
   return m;
 }
 
+function getMultiMode() {
+  var el = document.querySelector('input[name="multi-mode"]:checked');
+  return el ? el.value : 'correlated';
+}
+
 /* ================================================================
    COLLECT CONFIG
    ================================================================ */
@@ -832,6 +992,7 @@ async function runSimulation() {
     if (currentMode === 'single') await runSingle();
     else if (currentMode === 'sweep') await runSweep();
     else if (currentMode === 'compare') await runCompare();
+    else if (currentMode === 'multi') await runMultiSweep();
   } catch (err) {
     setStatus('Error: ' + err.message, true);
     console.error(err);
@@ -1055,6 +1216,7 @@ async function runSweep() {
     renderSweepTotalChart(results, sweepParam, selectedMetrics);
     renderSweepDecomp(results, sweepParam);
     buildSweepTable(results, sweepParam, allMetrics);
+    renderCorrelationMatrix(results, allMetrics);
     lastSweepData = {data: results, sweepParam: sweepParam, mcEnabled: mcEnabled, selectedMetrics: selectedMetrics, allMetrics: allMetrics};
     document.getElementById('btn-save').style.display = '';
     setProgress(100);
@@ -1069,25 +1231,45 @@ async function readStreamedResponse(resp) {
   var decoder = new TextDecoder();
   var buffer = '';
   var results = null;
-  while (true) {
-    var chunk = await reader.read();
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, {stream: true});
-    var lines = buffer.split('\n');
-    buffer = lines.pop();
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (!line) continue;
-      try {
-        var msg = JSON.parse(line);
-        if (msg.type === 'progress') {
-          setProgress(Math.round(msg.done / msg.total * 100));
-          setStatus(msg.status + ' (' + msg.done + '/' + msg.total + ')', false);
-        } else if (msg.type === 'result') { results = msg; }
-        else if (msg.type === 'error') { throw new Error(msg.message); }
-      } catch (e) { if (e.message && e.message.indexOf('Unexpected') === -1) throw e; }
+  var lastError = null;
+
+  function processLine(line) {
+    line = line.trim();
+    if (!line) return;
+    var msg = JSON.parse(line);
+    if (msg.type === 'progress') {
+      setProgress(Math.round(msg.done / msg.total * 100));
+      setStatus(msg.status + ' (' + msg.done + '/' + msg.total + ')', false);
+    } else if (msg.type === 'result') {
+      results = msg;
+    } else if (msg.type === 'error') {
+      throw new Error(msg.message);
     }
   }
+
+  while (true) {
+    var chunk = await reader.read();
+    /* Process chunk.value BEFORE checking done — the final read can
+       carry data and the done signal in the same response. */
+    if (chunk.value) {
+      buffer += decoder.decode(chunk.value, {stream: !chunk.done});
+      var lines = buffer.split('\n');
+      buffer = lines.pop();  /* keep any incomplete trailing line */
+      for (var i = 0; i < lines.length; i++) {
+        try { processLine(lines[i]); } catch(e) { lastError = e; console.error('Stream parse error:', e); }
+      }
+    }
+    if (chunk.done) break;
+  }
+
+  /* Flush anything left in the buffer after the stream closes. */
+  if (buffer.trim()) {
+    try { processLine(buffer); } catch(e) { lastError = e; console.error('Stream flush error:', e); }
+  }
+
+  /* If no result was received but we captured an error, propagate it
+     so the caller can display it instead of silently doing nothing. */
+  if (!results && lastError) throw lastError;
   return results;
 }
 
@@ -1224,6 +1406,537 @@ function buildSweepTable(data, sweepParam, allMetrics) {
   });
   html += '</tbody>';
   table.innerHTML = html;
+}
+
+/* ================================================================
+   CORRELATION MATRIX
+   ================================================================ */
+
+function pearson(xs, ys) {
+  var n = xs.length, mx = 0, my = 0, i;
+  for (i = 0; i < n; i++) { mx += xs[i]; my += ys[i]; }
+  mx /= n; my /= n;
+  var num = 0, dx = 0, dy = 0;
+  for (i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx  += (xs[i] - mx) * (xs[i] - mx);
+    dy  += (ys[i] - my) * (ys[i] - my);
+  }
+  dx = Math.sqrt(dx); dy = Math.sqrt(dy);
+  return (dx === 0 || dy === 0) ? null : num / (dx * dy);
+}
+
+function renderCorrelationMatrix(data, allMetrics) {
+  var isMC = data.mc === true;
+  var el = document.getElementById('chart-sweep-corr');
+  if (!el) return;
+
+  /* Extract one numeric vector per metric across sweep steps */
+  var vectors = {};
+  allMetrics.forEach(function(key) {
+    vectors[key] = data.values.map(function(row) {
+      var v = row[key];
+      if (v === undefined || v === null) return 0;
+      return (isMC && typeof v === 'object') ? v.mean : v;
+    });
+  });
+
+  /* Keep only metrics with non-zero variance */
+  var valid = allMetrics.filter(function(key) {
+    var xs = vectors[key];
+    var mn = xs.reduce(function(a, b) { return a + b; }, 0) / xs.length;
+    return xs.some(function(x) { return Math.abs(x - mn) > 1e-10; });
+  });
+
+  if (valid.length < 2) {
+    el.innerHTML = '<div class="placeholder" style="padding:20px">Not enough metric variance to compute correlations</div>';
+    return;
+  }
+
+  var n = valid.length;
+  var labels = valid.map(function(k) { return OUTPUT_METRICS[k] ? OUTPUT_METRICS[k].label : k; });
+  var z = [], zText = [];
+  for (var i = 0; i < n; i++) {
+    var row = [], rowTxt = [];
+    for (var j = 0; j < n; j++) {
+      var r = pearson(vectors[valid[i]], vectors[valid[j]]);
+      row.push(r !== null ? r : 0);
+      rowTxt.push(r !== null ? r.toFixed(2) : 'N/A');
+    }
+    z.push(row); zText.push(rowTxt);
+  }
+
+  var layout = Object.assign({}, LAYOUT_BASE, {
+    xaxis: {tickangle: -40, automargin: true, gridcolor: 'transparent'},
+    yaxis: {automargin: true, gridcolor: 'transparent'},
+    margin: {l: 140, r: 20, t: 10, b: 130},
+  });
+  delete layout.hovermode;
+
+  Plotly.newPlot('chart-sweep-corr', [{
+    type: 'heatmap', z: z, x: labels, y: labels,
+    zmin: -1, zmax: 1, colorscale: 'RdBu',
+    text: zText, texttemplate: '%{text}',
+    hovertemplate: '%{y} vs %{x}: <b>%{z:.3f}</b><extra></extra>',
+    showscale: true,
+  }], layout, PLOT_CFG);
+}
+
+/* ================================================================
+   MULTI-SWEEP — UI helpers
+   ================================================================ */
+
+function onMultiModeChange() {
+  var isGrid = getMultiMode() === 'grid';
+  document.getElementById('grid-plot-opts').classList.toggle('hidden', !isGrid);
+  /* metrics-bar: relevant for correlated path, not grid */
+  document.getElementById('metrics-bar').style.display = isGrid ? 'none' : '';
+  updateMultiJobCount();
+}
+
+function toggleMultiMC() {
+  var on = document.getElementById('multi-mc-enabled').checked;
+  document.getElementById('multi-mc-opts').classList.toggle('hidden', !on);
+  updateMultiJobCount();
+}
+
+function updateMultiJobCount() {
+  var warn = document.getElementById('multi-job-warning');
+  if (!warn) return;
+
+  function countSteps(from, to, step) {
+    if (step === 0) return 0;
+    return Math.round(Math.abs(to - from) / Math.abs(step)) + 1;
+  }
+  var n1 = countSteps(
+    parseFloat(document.getElementById('multi-from1').value) || 0,
+    parseFloat(document.getElementById('multi-to1').value)   || 0,
+    parseFloat(document.getElementById('multi-step1').value) || 0.1
+  );
+  var n2 = countSteps(
+    parseFloat(document.getElementById('multi-from2').value) || 0,
+    parseFloat(document.getElementById('multi-to2').value)   || 0,
+    parseFloat(document.getElementById('multi-step2').value) || 0.1
+  );
+  var mcOn = document.getElementById('multi-mc-enabled').checked;
+  var mc = mcOn ? (parseInt(document.getElementById('multi-mc-seeds').value) || 1) : 1;
+  var isGrid = getMultiMode() === 'grid';
+  var steps = isGrid ? n1 * n2 : Math.min(n1, n2);
+  var total = steps * mc;
+
+  warn.style.display = '';
+  warn.textContent = isGrid
+    ? 'Est. ' + total + ' sims (' + n1 + '×' + n2 + (mc > 1 ? '×' + mc + ' seeds' : '') + ')'
+    : 'Est. ' + total + ' sims (' + steps + ' steps' + (mc > 1 ? '×' + mc + ' seeds' : '') + ')';
+  warn.style.color = total > 500 ? '#dc2626' : total > 100 ? '#d97706' : '#059669';
+}
+
+/* ================================================================
+   MULTI-SWEEP — run
+   ================================================================ */
+
+async function runMultiSweep() {
+  try {
+    setStatus('Preparing multi-sweep...', false);
+    setProgress(0);
+
+    var mode    = getMultiMode();
+    var param1  = document.getElementById('multi-param1').value;
+    var param2  = document.getElementById('multi-param2').value;
+    if (param1 === param2) { setStatus('Parameters must be different', true); return; }
+
+    function makeValues(from, to, step) {
+      var arr = [], v = from, sign = step >= 0 ? 1 : -1;
+      while (sign * v <= sign * to + Math.abs(step) * 0.01) {
+        arr.push(Math.round(v * 1e6) / 1e6);
+        v += step;
+      }
+      return arr;
+    }
+    var sv1 = makeValues(
+      parseFloat(document.getElementById('multi-from1').value),
+      parseFloat(document.getElementById('multi-to1').value),
+      parseFloat(document.getElementById('multi-step1').value)
+    );
+    var sv2 = makeValues(
+      parseFloat(document.getElementById('multi-from2').value),
+      parseFloat(document.getElementById('multi-to2').value),
+      parseFloat(document.getElementById('multi-step2').value)
+    );
+    if (!sv1.length || !sv2.length) { setStatus('Invalid sweep range', true); return; }
+
+    /* Correlated path: arrays must match in length — truncate to shorter */
+    if (mode === 'correlated') {
+      var minLen = Math.min(sv1.length, sv2.length);
+      sv1 = sv1.slice(0, minLen); sv2 = sv2.slice(0, minLen);
+    }
+
+    var cfg      = collectConfig();
+    var workers  = parseInt(document.getElementById('multi-workers').value) || 6;
+    var mcOn     = document.getElementById('multi-mc-enabled').checked;
+    var mcSeeds  = mcOn ? (parseInt(document.getElementById('multi-mc-seeds').value) || 1) : 1;
+
+    var decomp = ['bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay',
+                  'bankruptcies_contagion','bankruptcies_fiscal','fire_sale_survivors',
+                  'tax_induced_failures','bankruptcy'];
+    var selectedMetrics = getSelectedMetrics();
+    var allMetrics;
+    if (mode === 'grid') {
+      allMetrics = Object.keys(OUTPUT_METRICS); /* compute everything — display is chosen post-run */
+    } else {
+      allMetrics = Array.from(new Set(decomp.concat(selectedMetrics)));
+    }
+
+    var totalRuns = (mode === 'grid' ? sv1.length * sv2.length : sv1.length) * mcSeeds;
+    setStatus('Running ' + totalRuns + ' simulations...', false);
+
+    var resp = await fetch('/api/sweep', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        sweep_mode: mode,
+        sweep_param: param1, sweep_values: sv1,
+        sweep_param2: param2, sweep_values2: sv2,
+        config: cfg, metrics: allMetrics,
+        mc_enabled: mcOn, mc_seeds: mcSeeds, workers: workers,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+
+    var results = await readStreamedResponse(resp);
+    if (results) {
+      document.getElementById('multi-placeholder').classList.add('hidden');
+      document.getElementById('multi-charts').classList.remove('hidden');
+      if (mode === 'grid') {
+        renderGridSweep(results);
+      } else {
+        renderCorrelatedPath(results, param1, param2, selectedMetrics);
+      }
+      lastMultiData = {data: results, mode: mode, param1: param1, param2: param2, selectedMetrics: selectedMetrics};
+      document.getElementById('btn-save').style.display = '';
+      setProgress(100);
+      setStatus('Done \u2014 ' + totalRuns + ' runs', false);
+    } else {
+      setStatus('Error: no results received from server (check browser console)', true);
+      setProgress(0);
+    }
+  } catch(e) {
+    setStatus('Error: ' + e.message, true);
+  }
+}
+
+/* ================================================================
+   MULTI-SWEEP — render: correlated path (1-D line chart)
+   ================================================================ */
+
+function renderCorrelatedPath(data, param1, param2, selectedMetrics) {
+  var p1Label = PARAM_LABELS[param1] || param1;
+  var p2Label = PARAM_LABELS[param2] || param2;
+  var isMC    = data.mc === true;
+  var sv      = data.sweep_values;
+  var vals    = data.values;
+
+  document.getElementById('multi-total-panel').style.display = '';
+  document.getElementById('multi-grid-panel').style.display  = 'none';
+  document.getElementById('multi-decomp-panel').style.display = '';
+  document.getElementById('multi-total-title').textContent =
+    'Metrics along path: ' + p1Label + ' \u2195 ' + p2Label;
+
+  /* --- selected-metric line chart (mirrors renderSweepTotalChart logic) --- */
+  if (!selectedMetrics || !selectedMetrics.length) {
+    document.getElementById('chart-multi-total').innerHTML =
+      '<div class="placeholder">Select metrics in the bar above to plot</div>';
+  } else {
+    var traces = [], yAxes = {}, axisNum = 0;
+    selectedMetrics.forEach(function(key, idx) {
+      var mInfo = OUTPUT_METRICS[key] || {label: key};
+      var color = LINE_COLORS[idx % LINE_COLORS.length];
+      axisNum++;
+      var yName = axisNum === 1 ? 'y' : 'y' + axisNum;
+      if (isMC && vals[0] && vals[0][key] && typeof vals[0][key] === 'object') {
+        var means  = vals.map(function(r) { return r[key] ? r[key].mean : 0; });
+        var stds   = vals.map(function(r) { return r[key] ? r[key].std  : 0; });
+        var upper  = means.map(function(m, j) { return m + stds[j]; });
+        var lower  = means.map(function(m, j) { return m - stds[j]; });
+        traces.push({x:sv,y:upper,mode:'lines',line:{width:0},showlegend:false,yaxis:yName,hoverinfo:'skip'});
+        traces.push({x:sv,y:lower,mode:'lines',line:{width:0},fill:'tonexty',fillcolor:hexToRgba(color,0.15),showlegend:false,yaxis:yName,hoverinfo:'skip'});
+        traces.push({x:sv,y:means,name:mInfo.label+' (mean)',type:'scatter',mode:'lines+markers',yaxis:yName,line:{width:2,color:color},marker:{size:6,color:color}});
+      } else {
+        var yv = vals.map(function(r) { return r[key] !== undefined ? r[key] : 0; });
+        traces.push({x:sv,y:yv,name:mInfo.label,type:'scatter',mode:'lines+markers',yaxis:yName,line:{width:2,color:color},marker:{size:6,color:color}});
+      }
+      var side = (axisNum % 2 === 1) ? 'left' : 'right';
+      yAxes['yaxis' + (axisNum === 1 ? '' : axisNum)] = {
+        title: mInfo.label, side: side, overlaying: axisNum > 1 ? 'y' : undefined,
+        showgrid: axisNum === 1, gridcolor: '#e5e7eb',
+      };
+    });
+    var layout = Object.assign({}, LAYOUT_BASE, {
+      xaxis: {title: p1Label + ' \u2195 ' + p2Label, gridcolor: '#e5e7eb'},
+      legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+      margin: {l: 60, r: 60, t: 30, b: 70},
+    }, yAxes);
+    Plotly.newPlot('chart-multi-total', traces, layout, PLOT_CFG);
+  }
+
+  /* --- bankruptcy decomposition stacked bar --- */
+  document.getElementById('multi-decomp-title').textContent = 'Bankruptcy Decomposition along path';
+  function getV(row, key) {
+    var v = row[key];
+    if (v === undefined) return 0;
+    return (isMC && typeof v === 'object') ? v.mean : v;
+  }
+  var channels = ['bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay',
+                  'bankruptcies_contagion','bankruptcies_fiscal'];
+  var cLabels  = ['Shock','Rationing','Repay/Fire','Contagion','Fiscal'];
+  var cColors  = [COLORS.shock, COLORS.rationing, COLORS.repay, COLORS.contagion, COLORS.fiscal];
+  var dTraces = channels.map(function(ch, ci) {
+    return {x: sv, y: vals.map(function(r){return getV(r,ch);}),
+            name: cLabels[ci], type: 'bar', marker: {color: cColors[ci]}};
+  });
+  dTraces.push({x:sv, y:vals.map(function(r){return getV(r,'bankruptcy');}),
+    name:'Total', type:'scatter', mode:'lines+markers',
+    line:{color:COLORS.total, width:2}, marker:{size:6}});
+  var dLayout = Object.assign({}, LAYOUT_BASE, {
+    barmode: 'stack',
+    xaxis: {title: p1Label + ' \u2195 ' + p2Label},
+    yaxis: {title: 'Bankruptcies'},
+    legend: {orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center'},
+    margin: {l: 60, r: 40, t: 30, b: 70},
+  });
+  Plotly.newPlot('chart-multi-decomp', dTraces, dLayout, PLOT_CFG);
+
+  /* Correlated path data table */
+  document.getElementById('multi-grid-table').innerHTML = '';
+  var tbl = document.getElementById('multi-path-table');
+  var isMC2 = data.mc === true;
+  var allKeys = ['bankruptcy'].concat(channels).concat(['fire_sale_survivors','tax_induced_failures']);
+  var tHtml = '<thead><tr><th>' + p1Label + '</th><th>' + p2Label + '</th>';
+  allKeys.forEach(function(k) { tHtml += '<th>' + (OUTPUT_METRICS[k] ? OUTPUT_METRICS[k].label : k) + (isMC2 ? ' (mean)' : '') + '</th>'; });
+  tHtml += '</tr></thead><tbody>';
+  sv.forEach(function(v1, i) {
+    tHtml += '<tr><td>' + v1 + '</td><td>' + (data.sweep_values2[i] !== undefined ? data.sweep_values2[i] : '') + '</td>';
+    allKeys.forEach(function(k) {
+      var v = vals[i][k];
+      var num = isMC2 && v && typeof v === 'object' ? v.mean : v;
+      tHtml += '<td>' + (num !== undefined ? (typeof num === 'number' ? num.toFixed(1) : num) : 0) + '</td>';
+    });
+    tHtml += '</tr>';
+  });
+  tHtml += '</tbody>';
+  tbl.innerHTML = tHtml;
+}
+
+/* ================================================================
+   MULTI-SWEEP — render: grid sweep (2-D heatmap / 3-D surface)
+   ================================================================ */
+
+function reRenderGridMetric() {
+  if (!lastMultiData || lastMultiData.mode !== 'grid') return;
+  var key = document.getElementById('grid-display-metric').value;
+  var sidebarSel = document.getElementById('grid-metric');
+  if (sidebarSel) sidebarSel.value = key;
+  renderGridSweep(lastMultiData.data);
+}
+
+/* Build path overlay traces from the stored matrix.
+   A "path" is a sequence of (sv1[i], sv2[j], z[i][j]) points.
+   main diagonal: i increases, j increases (both params go 0→max)
+   anti diagonal: i increases, j decreases (param1 up, param2 down = inverse)
+   Returns {traces3d, traces2d} — scatter3d and scatter traces respectively. */
+function buildPathTraces(z, sv1, sv2, p1Label, p2Label, metricLabel) {
+  var traces3d = [], traces2d = [];
+  var n1 = sv1.length, n2 = sv2.length;
+
+  function makeMain() {
+    var len = Math.min(n1, n2);
+    var px = [], py = [], pz = [];
+    for (var k = 0; k < len; k++) {
+      px.push(sv2[k]); py.push(sv1[k]); pz.push(z[k][k]);
+    }
+    return {px: px, py: py, pz: pz};
+  }
+
+  function makeAnti() {
+    var len = Math.min(n1, n2);
+    var px = [], py = [], pz = [];
+    for (var k = 0; k < len; k++) {
+      var j = n2 - 1 - k;
+      px.push(sv2[j]); py.push(sv1[k]); pz.push(z[k][j]);
+    }
+    return {px: px, py: py, pz: pz};
+  }
+
+  var showMain = document.getElementById('path-main-diag') && document.getElementById('path-main-diag').checked;
+  var showAnti = document.getElementById('path-anti-diag') && document.getElementById('path-anti-diag').checked;
+  var showMainHm = document.getElementById('path-main-diag-hm') && document.getElementById('path-main-diag-hm').checked;
+  var showAntiHm = document.getElementById('path-anti-diag-hm') && document.getElementById('path-anti-diag-hm').checked;
+
+  if (showMain) {
+    var d = makeMain();
+    traces3d.push({
+      type: 'scatter3d', mode: 'lines+markers',
+      x: d.px, y: d.py, z: d.pz,
+      name: 'Normal path (↗)',
+      line: {color: '#f97316', width: 6},
+      marker: {size: 5, color: '#f97316'},
+      hovertemplate: p1Label+': %{y}<br>'+p2Label+': %{x}<br>'+metricLabel+': <b>%{z:.1f}</b><extra>Normal path</extra>',
+    });
+  }
+  if (showAnti) {
+    var d = makeAnti();
+    traces3d.push({
+      type: 'scatter3d', mode: 'lines+markers',
+      x: d.px, y: d.py, z: d.pz,
+      name: 'Inverse path (↘)',
+      line: {color: '#ec4899', width: 6},
+      marker: {size: 5, color: '#ec4899'},
+      hovertemplate: p1Label+': %{y}<br>'+p2Label+': %{x}<br>'+metricLabel+': <b>%{z:.1f}</b><extra>Inverse path</extra>',
+    });
+  }
+  if (showMainHm) {
+    var d = makeMain();
+    traces2d.push({
+      type: 'scatter', mode: 'lines+markers',
+      x: d.px, y: d.py,
+      name: 'Normal path (↗)',
+      line: {color: '#f97316', width: 3},
+      marker: {size: 8, color: '#f97316', symbol: 'circle'},
+      hovertemplate: p1Label+': %{y}<br>'+p2Label+': %{x}<extra>Normal path</extra>',
+    });
+  }
+  if (showAntiHm) {
+    var d = makeAnti();
+    traces2d.push({
+      type: 'scatter', mode: 'lines+markers',
+      x: d.px, y: d.py,
+      name: 'Inverse path (↘)',
+      line: {color: '#ec4899', width: 3},
+      marker: {size: 8, color: '#ec4899', symbol: 'diamond'},
+      hovertemplate: p1Label+': %{y}<br>'+p2Label+': %{x}<extra>Inverse path</extra>',
+    });
+  }
+
+  return {traces3d: traces3d, traces2d: traces2d};
+}
+
+function renderGridSweep(data) {
+  var p1Label    = PARAM_LABELS[data.param1] || data.param1;
+  var p2Label    = PARAM_LABELS[data.param2] || data.param2;
+  var dispSel    = document.getElementById('grid-display-metric');
+  var metricKey   = (dispSel && data.matrix[dispSel.value]) ? dispSel.value : Object.keys(data.matrix)[0];
+  var metricLabel = OUTPUT_METRICS[metricKey] ? OUTPUT_METRICS[metricKey].label : metricKey;
+  var hasStd      = !!(data.mc && data.matrix_std);
+  var showStd     = hasStd && !!(document.getElementById('grid-show-std') || {}).checked;
+  var z           = showStd ? data.matrix_std[metricKey] : data.matrix[metricKey];  /* z[i][j]: row=i→param1, col=j→param2 */
+  var displayLabel = showStd ? metricLabel + ' (SD)' : metricLabel;
+  var sv1         = data.sweep_values;        /* param1 values (rows) */
+  var sv2         = data.sweep_values2;       /* param2 values (cols) */
+  var mcLabel     = showStd ? ' (MC SD)' : (data.mc ? ' (MC mean)' : '');
+  var title       = displayLabel + ' \u2014 ' + p1Label + ' \u00d7 ' + p2Label + mcLabel;
+
+  document.getElementById('multi-total-panel').style.display    = 'none';
+  document.getElementById('multi-grid-panel').style.display     = '';
+  document.getElementById('multi-heatmap-panel').style.display  = '';
+  document.getElementById('multi-decomp-panel').style.display   = 'none';
+  document.getElementById('multi-grid-title').textContent    = title + ' \u2014 3D';
+  document.getElementById('multi-heatmap-title').textContent = title + ' \u2014 2D Heatmap';
+
+  /* Plotly: z[row][col] → y[row]=param1, x[col]=param2 */
+  var surfaceHover = (hasStd && !showStd)
+    ? p1Label+': %{y}<br>'+p2Label+': %{x}<br>'+displayLabel+': <b>%{z:.1f}</b> \u00b1 %{customdata:.1f}<extra></extra>'
+    : p1Label+': %{y}<br>'+p2Label+': %{x}<br>'+displayLabel+': <b>%{z:.1f}</b><extra></extra>';
+
+  /* Axis-flip toggles — display-only, leaves underlying data canonical.
+     Gives users the "inverse sweep" view without re-computing anything. */
+  function flipState(id) {
+    var el = document.getElementById(id);
+    return el && el.checked;
+  }
+  var flipX   = flipState('grid-flip-x');
+  var flipY   = flipState('grid-flip-y');
+  var flipXhm = flipState('grid-flip-x-hm');
+  var flipYhm = flipState('grid-flip-y-hm');
+
+  /* Build path overlays */
+  var paths = buildPathTraces(z, sv1, sv2, p1Label, p2Label, metricLabel);
+
+  /* 3D surface + optional path lines */
+  var surfaceTrace = {
+    type: 'surface', x: sv2, y: sv1, z: z,
+    colorscale: 'Viridis', showscale: true, opacity: 0.92,
+    hovertemplate: surfaceHover,
+  };
+  if (hasStd && !showStd) { surfaceTrace.customdata = data.matrix_std[metricKey]; }
+  var traces3d = [surfaceTrace].concat(paths.traces3d);
+
+  Plotly.newPlot('chart-multi-grid', traces3d, {
+    scene: {
+      xaxis: {title: p2Label, autorange: flipX ? 'reversed' : true},
+      yaxis: {title: p1Label, autorange: flipY ? 'reversed' : true},
+      zaxis: {title: displayLabel},
+    },
+    legend: {x: 0.02, y: 0.98, font: {size: 11}},
+    margin: {l: 0, r: 0, t: 40, b: 0},
+    paper_bgcolor: 'white',
+  }, PLOT_CFG);
+
+  /* 2D heatmap + optional path lines */
+  var heatmapTrace = {
+    type: 'heatmap', x: sv2, y: sv1, z: z,
+    colorscale: 'Viridis', showscale: true,
+    hovertemplate: surfaceHover,
+  };
+  if (hasStd && !showStd) { heatmapTrace.customdata = data.matrix_std[metricKey]; }
+  var traces2d = [heatmapTrace].concat(paths.traces2d);
+
+  Plotly.newPlot('chart-multi-heatmap', traces2d, Object.assign({}, LAYOUT_BASE, {
+    xaxis: {title: p2Label, gridcolor: '#e5e7eb', autorange: flipXhm ? 'reversed' : true},
+    yaxis: {title: p1Label, gridcolor: '#e5e7eb', autorange: flipYhm ? 'reversed' : true},
+    legend: {x: 1.12, y: 1, font: {size: 11}},
+    margin: {l: 80, r: 20, t: 30, b: 80},
+  }), PLOT_CFG);
+
+  buildGridTable(data, sv1, sv2, p1Label, p2Label, metricLabel, metricKey);
+
+  /* Show/hide the "Show Std" checkbox depending on whether MC std data is present */
+  var stdLbl = document.getElementById('grid-show-std-label');
+  if (stdLbl) { stdLbl.style.display = hasStd ? '' : 'none'; }
+}
+
+function buildGridTable(data, sv1, sv2, p1Label, p2Label, metricLabel, metricKey) {
+  var el = document.getElementById('multi-grid-table');
+  if (!el) return;
+  var hasStd = !!(data.mc && data.matrix_std);
+  var z    = data.matrix[metricKey];
+  var zStd = hasStd ? data.matrix_std[metricKey] : null;
+
+  var html = '<thead><tr><th rowspan="' + (hasStd ? 2 : 1) + '">' + p1Label + ' \\ ' + p2Label + '</th>';
+  if (hasStd) {
+    html += '<th colspan="' + sv2.length + '">Mean</th><th colspan="' + sv2.length + '">SD</th>';
+    html += '</tr><tr>';
+    sv2.forEach(function(v) { html += '<th>' + v + '</th>'; });
+    sv2.forEach(function(v) { html += '<th>' + v + '</th>'; });
+  } else {
+    sv2.forEach(function(v) { html += '<th>' + v + '</th>'; });
+  }
+  html += '</tr></thead><tbody>';
+
+  sv1.forEach(function(v1, i) {
+    html += '<tr><td><b>' + v1 + '</b></td>';
+    sv2.forEach(function(v2, j) {
+      var val = z[i] && z[i][j] !== undefined ? z[i][j] : 0;
+      html += '<td>' + (typeof val === 'number' ? val.toFixed(1) : val) + '</td>';
+    });
+    if (hasStd) {
+      sv2.forEach(function(v2, j) {
+        var s = zStd[i] && zStd[i][j] !== undefined ? zStd[i][j] : 0;
+        html += '<td>' + (typeof s === 'number' ? s.toFixed(1) : s) + '</td>';
+      });
+    }
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  el.innerHTML = html;
 }
 
 /* ================================================================
@@ -1428,7 +2141,7 @@ function setRadio(name, value) {
    ================================================================ */
 
 async function saveResults() {
-  if (!lastSweepData && !lastCompareData) { alert('No results to save.'); return; }
+  if (!lastSweepData && !lastCompareData && !lastMultiData) { alert('No results to save.'); return; }
   var name = prompt('Enter a name for the export files:');
   if (!name) return;
 
@@ -1463,6 +2176,72 @@ async function saveResults() {
       });
       csv = rows.join('\n');
       try { var img = await Plotly.toImage('chart-sweep-total', {format:'png',width:1200,height:600}); pngB64 = img.split(',')[1]; } catch(e) {}
+
+    } else if (currentMode === 'multi' && lastMultiData) {
+      var md = lastMultiData;
+      var p1L = PARAM_LABELS[md.param1] || md.param1;
+      var p2L = PARAM_LABELS[md.param2] || md.param2;
+      if (md.mode === 'grid') {
+        var sv1g = md.data.sweep_values, sv2g = md.data.sweep_values2;
+        var allMatrixMetrics = Object.keys(md.data.matrix);
+        var hasStdSave = !!(md.data.mc && md.data.matrix_std);
+        var csvBlocks = [];
+        allMatrixMetrics.forEach(function(mKey) {
+          var mLbl = OUTPUT_METRICS[mKey] ? OUTPUT_METRICS[mKey].label : mKey;
+
+          /* Mean block */
+          var block = [mLbl];
+          block.push(p1L + '\\' + p2L + ',' + sv2g.join(','));
+          sv1g.forEach(function(v1, i) {
+            block.push([v1].concat(sv2g.map(function(v2, j) {
+              var val = md.data.matrix[mKey][i] && md.data.matrix[mKey][i][j] !== undefined ? md.data.matrix[mKey][i][j] : 0;
+              return typeof val === 'number' ? val.toFixed(1) : val;
+            })).join(','));
+          });
+          csvBlocks.push(block.join('\n'));
+
+          /* SD block — MC only */
+          if (hasStdSave) {
+            var stdBlock = [mLbl + ' (SD)'];
+            stdBlock.push(p1L + '\\' + p2L + ',' + sv2g.join(','));
+            sv1g.forEach(function(v1, i) {
+              stdBlock.push([v1].concat(sv2g.map(function(v2, j) {
+                var s = md.data.matrix_std[mKey][i] && md.data.matrix_std[mKey][i][j] !== undefined
+                        ? md.data.matrix_std[mKey][i][j] : 0;
+                return typeof s === 'number' ? s.toFixed(1) : s;
+              })).join(','));
+            });
+            csvBlocks.push(stdBlock.join('\n'));
+          }
+        });
+        csv = csvBlocks.join('\n\n');
+        /* Save both plots: heatmap as primary PNG, surface as secondary */
+        try { var imgG = await Plotly.toImage('chart-multi-heatmap', {format:'png',width:1200,height:700}); pngB64 = imgG.split(',')[1]; } catch(e) {}
+        try {
+          var imgS = await Plotly.toImage('chart-multi-grid', {format:'png',width:1200,height:800});
+          var respS = await fetch('/api/save', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name + '_3d', png: imgS.split(',')[1], csv: ''}),
+          });
+        } catch(e) {}
+      } else {
+        var isMCm = md.data.mc === true;
+        var mKeys = ['bankruptcy','bankruptcies_shock','bankruptcies_rationing','bankruptcies_repay',
+                     'bankruptcies_contagion','bankruptcies_fiscal','fire_sale_survivors','tax_induced_failures'];
+        var hdrM = [p1L, p2L].concat(mKeys.map(function(k) { return OUTPUT_METRICS[k] ? OUTPUT_METRICS[k].label : k; }));
+        var rowsM = [hdrM.join(',')];
+        md.data.sweep_values.forEach(function(v1, i) {
+          var row = [v1, md.data.sweep_values2[i] !== undefined ? md.data.sweep_values2[i] : ''];
+          mKeys.forEach(function(k) {
+            var v = md.data.values[i][k];
+            var num = isMCm && v && typeof v === 'object' ? v.mean : v;
+            row.push(num !== undefined ? (typeof num === 'number' ? num.toFixed(1) : num) : 0);
+          });
+          rowsM.push(row.join(','));
+        });
+        csv = rowsM.join('\n');
+        try { var imgP = await Plotly.toImage('chart-multi-total', {format:'png',width:1200,height:600}); pngB64 = imgP.split(',')[1]; } catch(e) {}
+      }
 
     } else if (currentMode === 'compare' && lastCompareData) {
       var cd = lastCompareData;
