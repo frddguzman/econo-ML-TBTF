@@ -311,3 +311,59 @@ HTML templates in `templates/`: `index_zombie.html`, `index_sweep.html`, `index_
 | `run_tbtf.py` | Single TBTF simulation runner |
 | `doc/figures/*.tex` | TikZ source for thesis diagrams |
 | `doc/figures/*.png` | Rendered diagram PNGs |
+---
+
+## 14. Canonical parameter defaults (2026-04 to 2026-05)
+
+Three numerical defaults patched in the `Config` class. Equations unchanged.
+
+| Parameter | Pre-thesis | Canonical | Effect |
+|-----------|------------|-----------|--------|
+| `gamma_capital` | 0.08 | **0.10** | Basel-aligned IRB capital fraction. Shifts the eta-optimum into the fiscal-feedback band. |
+| `omega` | 0.60 | **0.58** | Deposit-shock amplitude; stable hub formation under `equity_heterogeneity=False`. |
+| `fund_levy_rate` (tau) | 0.005 | **1e-5** | EU SRF target rate under a weekly-period interpretation. The 1e-4 alternative is retained as a sensitivity. |
+
+Other locked-in conventions: `N = 50`, `T = 1000`, `mu = 0.7`, `beta = 5`, `alpha_collateral = 0.05`, `rho = 0.40`, `equity_heterogeneity = False`, `reintroduce_with_median = True`, initial `l_0 = 120`, `C_0 = 30`, `D_0 = 135`, `E_0 = 15`.
+
+---
+
+## 15. New scripts
+
+A render / analyse / sweep pipeline was added on top of the model. The shared style and path helpers live in `scripts/canonical/thesis_render_utils.py`. All scripts read the simulation output directory from the `TBTF_SIM_DIR` env var (see section 18).
+
+| Group | Scripts | One-liner |
+|-------|---------|-----------|
+| Canonical sweeps | `sweep_w58_canonical_full_grid.py`, `sweep_w58_rho.py`, `sweep_w58_alpha_rho.py`, `sweep_w58_tau.py`, `sweep_w58_tau_low.py`, `sweep_w58_gamma.py`, `sweep_w58_cv_phase05.py`, `sweep_w58_tenure_distribution.py` | Parameter sweeps over the canonical (gamma=0.10, omega=0.58, tau=1e-5) baseline. |
+| Renderers | `render_brini_canonical.py`, `render_topology_snapshots{,_e0,_e085}.py`, `render_contagion_vs_{eta,rho,alpha}.py`, `render_total_bk_vs_eta.py`, `render_ccf_hub_client_count.py`, `render_tenure_thresholds.py`, `render_chain_body.py`, `render_omega_section.py`, plus non-shipping variants. | Stand-alone PNG/TeX producers; one figure per script. |
+| Analysers | `analyze_ddf_indegree{,_e0,_e085}.py`, `analyze_kcore{,_e0,_e085}.py`, `analyze_hub_turnover_causality.py`, `analyze_network_metrics_regression.py`, `analyze_categorical_regression.py`, `analyze_median_seed.py`, `analyze_w58_ccf.py` | Post-processing of sweep CSVs and dashboard JSONs. |
+| CCF pipeline | `ccf_w58_from_dashboard.py`, `ccf_w58_full_regimes.py` | Hub-client-count cross-correlation pipeline. |
+| Shared module | `thesis_render_utils.py` | Regime palette, 5-seed CSV reader, `save_fig` helpers, standard figure size + DPI. |
+
+---
+
+## 16. Verified parameter behaviour
+
+Two facts verified across the canonical w58 cv=0 grid:
+
+- **rho-peak universality.** The contagion-bankruptcy peak at `rho = 0.7` reproduces across all 9 cells of the (3 fiscal regimes) x (3 eta anchors {0, 0.10, 0.85}) grid.
+- **tau sensitivity.** `eta* = 0.10` survives at the canonical `tau = 1e-5` (EU SRF interpretation). The `tau = 1e-4` alternative levy is high enough that the levy itself kills survivors and wipes the interior optimum (approximately +30 percent total bankruptcies vs canonical at `eta = 0.10`).
+
+---
+
+## 17. Reproducibility conventions
+
+- **Seed pool.** Aggregate sweep figures use the 5-seed pool `{26462, 26463, 26464, 26465, 26466}`. Single-seed time-series and network figures use `SEED = 26474` (contagion-median).
+- **RNG.** `np.random.default_rng(seed)` everywhere; the legacy `np.random.RandomState` path was retired in the canonical recalibration commit.
+- **Output directory.** Simulation output paths are read from the `TBTF_SIM_DIR` environment variable. Defaults to a sibling `Simulations/` folder when unset, so running on a fresh checkout does not require config.
+
+---
+
+## 18. Path-portability refactor
+
+Eight scripts (`render_brini_canonical.py`, `render_topology_snapshots*.py`, `analyze_ddf_indegree*.py`, `analyze_kcore*.py`, `analyze_w58_ccf.py`, `ccf_w58_from_dashboard.py`, `ccf_w58_full_regimes.py`, `sweep_w58_canonical_full_grid.py`) were updated to resolve the simulation output directory through `os.environ.get("TBTF_SIM_DIR", default_sibling)` rather than the hardcoded Windows path that earlier drafts shipped with. The remaining scripts in the canonical and exploration pipelines were already path-portable.
+
+---
+
+## 19. Repository cleanup (2026-06-12)
+
+Stripped thesis-document content out of the code repository (`TFG/`, `thesis_notes/`, `thesis_assets/`, `alternativa.tex`) — all moved to a separate document repository or gitignored locally. Reorganised exploratory and pipeline scripts from the repo root into `scripts/{canonical,exploration,utils}/`; root-level test files merged into the existing `tests/` directory. Re-wrote `README.md` and trimmed sections 14-onward of this changelog to a code-focused format; the dropped material (Loops naming policy, de-naming conventions, claims-to-files maps, render-script-to-section-ID mappings, tutor-patch micro-edits) belonged in the thesis text, not the code repo.

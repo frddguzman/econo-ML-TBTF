@@ -47,3 +47,188 @@ auxil/*
 *.txt
 *copia*
 beta comparison.html
+
+# Local release staging (not for commit)
+_release_prep/
+
+# === Thesis-era additions (2026-05) ===
+
+# Backup archives + snapshots
+*.rar
+*.zip
+*.bak
+*.bak.*
+bak_*/
+bak_*.rar
+shipping_ready*/
+shipping_ready*.zip
+latex freddy.zip
+*_backup_*.py
+*_backup_*.html
+* - copia.*
+*copia*
+
+# Discarded work
+discarded/
+
+# Generated dashboards
+dashboard.html
+dashboard_bak*.html
+dashboard_backup_*.html
+
+# Data caches at root (large)
+.event_study_data.json
+dashboard_bank_*.json
+pref_screening_*.json
+
+# Root logs (in addition to existing logs/ entry)
+*.log
+!doc/*.tex
+
+# LaTeX build artifacts under TFG/ and presentation/
+TFG/**/*.aux
+TFG/**/*.log
+TFG/**/*.out
+TFG/**/*.toc
+TFG/**/*.lof
+TFG/**/*.lot
+TFG/**/*.bbl
+TFG/**/*.blg
+TFG/**/*.fls
+TFG/**/*.fdb_latexmk
+TFG/**/*.synctex.gz
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+informe.aux
+informe.log
+informe.out
+
+# Compiled thesis PDFs (re-buildable from LaTeX source)
+TFG/*.pdf
+TFG/presentation/*.pdf
+TFG/ALL PDFS/
+TFG/presentation/node_modules/
+TFG/presentation/.cache/
+TFG/TFG/
+TFG/.claude/
+TFG/.vscode/
+
+# Exploration PNGs at repo root (canonical figures live under thesis_assets/)
+bsl_*.png
+c3_*.png
+w55_*.png
+w58_*.png
+brini_w58_h1_*.png
+compare_*.png
+compare_v2_*.png
+compare_v3_*.png
+d1_*.png
+cellC_*.png
+ccf_w58_*.png
+
+# Exploration sweep CSV outputs at repo root
+brini_w58_h1_*.csv
+c3_bilateral_brini_summary.csv
+ccf_w58_*.csv
+sweep_*_raw.csv
+sweep_*_contaminated.csv
+smoke_*_raw.csv
+sweep_w58_cv_phase05_*seed.csv
+sweep_w58_tenure_dist_raw.csv
+
+# Session scratch notes
+FULL_CONTEXT_*.md
+updated_context*.md
+summary_session.md
+context_issue.md
+we need.md
+literature_notes.md
+thesis_figures_inventory.md
+latex_audit_w58_canonical.md
+
+# Thesis-notes scratch + bak files
+thesis_notes/_docx_full_tmp.txt
+thesis_notes/_fdf_annots_tmp.txt
+thesis_notes/_phase1_to_phase2_buffer*.md
+thesis_notes/PHASE*_BOOTSTRAP.md
+thesis_notes/PHASE*_PROMPT.md
+thesis_notes/PHASE*_FORK_HANDOFF.md
+thesis_notes/PHASE_BOOTSTRAP.md
+thesis_notes/FORK_CONTEXT.md
+thesis_notes/FIX_AUDIT*.md
+thesis_notes/FINAL_TUTOR_PATCH_AUDIT.md
+thesis_notes/CITATION_AUDIT*.md
+thesis_notes/ch3_audit.md
+thesis_notes/_parse_fdf.py
+thesis_notes/phase25_buffers/
+
+# Operational handoff folders (intermediate artifacts)
+dashboard_handoff/
+phase1_hub_series/
+
+# === Q4: Approach-A stale claim files (excluded per user 2026-05-15 decision) ===
+TFG/capitulos/claim_1.tex
+TFG/capitulos/claim_2.tex
+TFG/capitulos/claim_3.tex
+TFG/capitulos/zombie_channel.tex
+TFG/capitulos/beta_comparison.tex
+TFG/capitulos/extended_data.tex
+
+# === Q7: Internal operational docs (not for public commit) ===
+MASTER_HOWTO.md
+IMPLEMENTATION_PLAN.md
+
+# === Cleanup commit additions ===
+
+# === 2026-06-12 cleanup: thesis-doc content stays local ===
+TFG/
+thesis_notes/
+thesis_assets/
+alternativa.tex
+
+# Internal session scratch / planning docs
+FULL_CONTEXT_new.md
+IMPLEMENTATION_PLAN.md
+MASTER_HOWTO.md
+FINAL_TUTOR_PATCH_AUDIT.md
+FIX_AUDIT*.md
+CITATION_AUDIT*.md
+PHASE*_BOOTSTRAP.md
+PHASE*_PROMPT.md
+PHASE*_FORK_HANDOFF.md
+README_proposed.md
+thesis_figures_inventory.md
+updated_context*.md
+literature_notes.md
+latex_audit_w58_canonical.md
+context_issue.md
+summary_session.md
+we need.md
+
+# Local backup snapshots
+bak_thesis_for_prof_*/
+bak_thesis_for_prof_*.rar
+
+# Backup copies of the core engine (live model is interbank.py)
+interbank_backup_pre_*.py
+
+# Ad-hoc thesis-text helpers (LaTeX find/replace, scratch)
+_swap_period_colon.py
+copia.py
+
+# === Additional cleanup-commit untracked stragglers ===
+gui_zombie - copia.py
+smoke_cand_b.py
+smoke_tier_init_beta_sweep.py
+smoke_tier_init_k5.py
+smoke_tier_init_v2.py
+dump_cb_test.py
+dump_topology_s62.py
+dump_topology_v2.py

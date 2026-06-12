@@ -87,6 +87,46 @@ class Config:
     fund_levy_rate: float = 0.005    # τ_fund: periodic levy rate on assets (resolution_fund regime)
     fund_initial_balance: float = 0.0  # starting resolution fund balance
 
+    # Initial equity heterogeneity. When True, initial E_i (t=0) AND replacement-bank
+    # E_i (in replace_bank, line ~2412) are drawn from a lognormal distribution.
+    # Replacement-side draw is centred on the current median so heterogeneity persists
+    # throughout the run instead of being eroded by median-replacement.
+    equity_heterogeneity: bool = False  # if True, draw E_i from lognormal distribution
+    equity_cv: float = 0.5              # coefficient of variation σ/μ for the lognormal draw
+    equity_max_factor: float = 0.0      # truncate lognormal draws at factor*E_mean (0 = unbounded). Approach B (v6 §8 Option 1).
+    equity_min_factor: float = 0.0      # floor lognormal draws at factor*E_mean (0 = use default 0.01 floor)
+
+    # Initial equity tier structure. When True, n_big banks are tagged 'big' at
+    # E_i0*E_big_multiplier and the rest 'small' such that sum(E)=N*E_i0. Tier
+    # tag persists with bank ID through replacement (failed bank returns at its
+    # tier mode). Mutually exclusive with equity_heterogeneity and cash_boost_random.
+    tier_init: bool = False
+    n_big: int = 3                 # FSB G-SIB anchor (~6% of N=50)
+    E_big_multiplier: float = 3.0  # Basel III G-SIB surcharge anchor (1.5-4x range)
+
+    # Random cash-boost heterogeneity ("BA-cash without BA-topology"). When True,
+    # a random subset of banks gets extra cash at init (mimicking BA's
+    # prize_for_good_banks but with random ID assignment, no topology lock, and
+    # tier re-drawn on replacement). Balance-sheet preserving: ΔC absorbed by ΔD
+    # (and R = r̂·D tracks); E uniform across banks. Mutually exclusive with
+    # equity_heterogeneity (both modify init balance sheets).
+    cash_boost_random: bool = False
+    cash_boost_n_super: int = 1            # banks getting (super_factor)× cash
+    cash_boost_n_pref: int = 14            # banks getting (pref_factor)× cash
+    cash_boost_super_factor: float = 3.0
+    cash_boost_pref_factor: float = 2.0
+
+    # Fitness specification — controls how bank.mu is computed.
+    #   "equity"    : Φ_i = E_i / E_max (current Tedeschi spec, default)
+    #   "loan_book" : Φ_i = L_i / L_max (lender's outstanding portfolio)
+    #   "bilateral" : Φ_i^j = L_ij / L_max_system (borrower-specific; uses
+    #                 eq.6 bilateral cap, normalized by system-max over all
+    #                 (k,m) pairs at time t)
+    fitness_basis: str = "equity"
+    # AR(1) smoothing on raw fitness signal: tilde_Φ_t = (1-λ)·Φ_raw + λ·tilde_Φ_{t-1}
+    # λ = 0 (default) is byte-identical to no smoothing. λ ∈ [0, 1).
+    fitness_inertia: float = 0.0
+
     # If true, psi variable will be ignored:
     psi_endogenous = False
     psi: float = 0  # market power parameter : 0 perfect competence .. 1 monopoly
@@ -268,6 +308,33 @@ class Statistics:
 
         self.best_lender = np.full(self.model.config.T, -1, dtype=int)
         self.best_lender_clients = np.full(self.model.config.T, -1, dtype=int)
+        self.best_lender_fitness = np.zeros(self.model.config.T, dtype=float)
+        self.best_lender_equity  = np.zeros(self.model.config.T, dtype=float)
+        # Composite identity for the hub: same numeric id can refer to different
+        # banks across replacements (replace_bank() preserves self.id, only
+        # bumps self.failures). Pair (best_lender, best_lender_generation) is
+        # the unambiguous key for tenure measurement.
+        self.best_lender_generation = np.full(self.model.config.T, -1, dtype=int)
+        # Borrower-side TBTF identity: argmax(A_lagged) each period. Hypothesis:
+        # this id is persistent because the TBTF feedback (high b_j -> inflated
+        # cheap credit -> equity grows -> A stays high) reinforces the same
+        # bank, while the lender it borrows from is drained and rotates. Same
+        # composite (id, generation) key for unambiguous tenure.
+        self.top_A_bank       = np.full(self.model.config.T, -1, dtype=int)
+        self.top_A_generation = np.full(self.model.config.T, -1, dtype=int)
+        self.top_A_value      = np.zeros(self.model.config.T, dtype=float)
+        # Triangulating measure: biggest current loan-recipient by bank.l.
+        # Only defined when biggest-A bank is actively borrowing (~55% of
+        # periods); rotates more by construction. Gap with top_A_bank is the
+        # role-flip signature.
+        self.top_borrower_bank       = np.full(self.model.config.T, -1, dtype=int)
+        self.top_borrower_generation = np.full(self.model.config.T, -1, dtype=int)
+        self.top_borrower_l          = np.zeros(self.model.config.T, dtype=float)
+        # Hub-change cause: at each period t with a hub change, was the previous
+        # hub's bank still alive (same generation) or replaced (generation
+        # ticked). 1=alive (fitness-driven), 0=dead (mortality-driven), -1=N/A.
+        self.previous_hub_alive = np.full(self.model.config.T, -1, dtype=int)
+        self._bank_rows = []  # list of dicts for bank_detail export
         self.potential_credit_channels = np.zeros(self.model.config.T, dtype=int)
         self.active_borrowers = np.zeros(self.model.config.T, dtype=int)
         self.prob_bankruptcy = np.zeros(self.model.config.T, dtype=float)
@@ -349,6 +416,46 @@ class Statistics:
                 best_value = lenders[lender]
         self.best_lender[self.model.t] = best
         self.best_lender_clients[self.model.t] = best_value
+        if best >= 0:
+            hub = self.model.banks[best]
+            self.best_lender_fitness[self.model.t] = float(hub.mu)
+            self.best_lender_equity[self.model.t]  = float(hub.E)
+            self.best_lender_generation[self.model.t] = int(getattr(hub, 'failures', 0))
+        # Borrower-side hubs: argmax(A_lagged) [TBTF identity] and argmax(l)
+        # [biggest current loan-recipient]. Single pass over banks.
+        top_a_id, top_a_val = -1, -1.0
+        top_l_id, top_l_val = -1, -1.0
+        for b in self.model.banks:
+            if b.failed:
+                continue
+            a_lag = getattr(b, 'A_lagged', 0)
+            if a_lag > top_a_val:
+                top_a_id, top_a_val = b.id, a_lag
+            bl = getattr(b, 'l', 0)
+            if bl > top_l_val:
+                top_l_id, top_l_val = b.id, bl
+        if top_a_id >= 0:
+            self.top_A_bank[self.model.t]       = top_a_id
+            self.top_A_generation[self.model.t] = int(self.model.banks[top_a_id].failures)
+            self.top_A_value[self.model.t]      = float(top_a_val)
+        if top_l_id >= 0 and top_l_val > 0:
+            self.top_borrower_bank[self.model.t]       = top_l_id
+            self.top_borrower_generation[self.model.t] = int(self.model.banks[top_l_id].failures)
+            self.top_borrower_l[self.model.t]          = float(top_l_val)
+        # Was the previous period's hub bank still alive at this point in the
+        # period? Note: this runs BEFORE replace_bankrupted_banks, so a bank
+        # that failed in the current period has bank.failed=True but its
+        # failures counter has not been incremented yet. Cover both cases.
+        if self.model.t > 0 and self.best_lender[self.model.t - 1] >= 0:
+            prev_id = int(self.best_lender[self.model.t - 1])
+            if 0 <= prev_id < len(self.model.banks):
+                prev_gen_then = int(self.best_lender_generation[self.model.t - 1])
+                prev_bank = self.model.banks[prev_id]
+                same_gen = (int(prev_bank.failures) == prev_gen_then)
+                currently_failed = bool(getattr(prev_bank, 'failed', False))
+                # Alive iff still on the same generation AND not failed-this-period
+                alive = same_gen and not currently_failed
+                self.previous_hub_alive[self.model.t] = 1 if alive else 0
         credit_channels = self.model.config.lender_change.get_credit_channels()
         if not self.stats_market:
             if credit_channels is None:
@@ -357,6 +464,46 @@ class Statistics:
                 self.potential_credit_channels[self.model.t] = credit_channels
         if self.statistics_stats_market:
             self.statistics_stats_market.compute_credit_channels_and_best_lender()
+
+    def record_bank_snapshot(self, banks):
+        """Append one row per active bank at the current period for bank_detail export.
+
+        Two corrections vs the previous version:
+        - 'p_j' now stores the actual default probability (1 - prob_surviving) per
+          eq. 4 of the model, not prob_surviving itself. The previous writer was
+          mislabelled — it stored survival probability under the column name p_j.
+        - 'b_j' (the TBTF bailout probability per eq. 3) is now emitted per bank.
+          Computed locally from each bank's A_lagged so the path-agnostic for
+          Boltzmann runs (where the model-level max_A_lagged isn't yet set when
+          this snapshot is taken).
+        """
+        t = self.model.t
+        hub_id = int(self.best_lender[t]) if t < len(self.best_lender) else -1
+        max_A_lagged = max(
+            (bb.A_lagged for bb in banks if not bb.failed and getattr(bb, 'A_lagged', 0) > 0),
+            default=1.0,
+        )
+        for b in banks:
+            if not b.failed:
+                clients = len(b.active_borrowers) if isinstance(b.active_borrowers, dict) else 0
+                A_lag = float(getattr(b, 'A_lagged', 0.0))
+                b_j = (A_lag / max_A_lagged) if max_A_lagged > 0 else 0.0
+                # Per-bank interest rate (TBTF-influenced via eq. 6 denominator).
+                # bank.get_loan_interest() returns the rate the bank charges/pays
+                # at this period; 0 if the bank is neither lending nor borrowing.
+                ir = b.get_loan_interest() if hasattr(b, 'get_loan_interest') else 0.0
+                self._bank_rows.append({
+                    't':       t,
+                    'bank_id': int(b.id),
+                    'equity':  float(b.E),
+                    'fitness': float(b.mu),
+                    'p_j':     float(1.0 - b.prob_surviving),
+                    'b_j':     float(b_j),
+                    'interest_rate': float(ir) if ir else 0.0,
+                    'loan':    float(b.L),
+                    'clients': clients,
+                    'is_hub':  int(hub_id == b.id),
+                })
 
     def compute_statistics_of_graph(self):
         if self.model.config.lender_change.GRAPH_NAME:
@@ -1214,6 +1361,9 @@ class Model:
         self.value_for_reintroduced_banks_L = self.config.L_i0
         self.value_for_reintroduced_banks_E = self.config.E_i0
         self.value_for_reintroduced_banks_D = self.config.D_i0
+        # Tier-init rotation tracking (only used when config.tier_init=True; harmless defaults otherwise)
+        self.tier_init_ever_big_ids = set()  # rotation breadth: bank IDs that ever held tier='big'
+        self.big_bank_death_count = 0        # rotation frequency: count of big-bank death events during run
         if configuration:
             self.configure(**configuration)
         if self.backward_enabled:
@@ -1249,11 +1399,34 @@ class Model:
         if seed is not None and not dont_seed:
             applied_seed = seed if seed else self.default_seed
             random.seed(applied_seed)
+            # NumPy has a separate global RNG state that random.seed() doesn't touch.
+            # We use an isolated Generator (default_rng) to avoid polluting the global
+            # state and to make hetero (lognormal) draws deterministic per-seed.
+            # Required for reproducibility of all equity_heterogeneity sims.
+            self.rng = np.random.default_rng(applied_seed)
             self.config.seed = applied_seed
         self.save_graphs = save_graphs_instants
         self.banks = []
         self.t = 0
         self.resolution_fund_balance = self.config.fund_initial_balance
+        # Validate fitness toggles (added in Phase 1; defaults are safe)
+        if self.config.fitness_basis not in ("equity", "loan_book", "bilateral"):
+            raise ValueError(
+                "fitness_basis must be one of 'equity', 'loan_book', 'bilateral'; "
+                f"got {self.config.fitness_basis!r}")
+        if not (0.0 <= self.config.fitness_inertia < 1.0):
+            raise ValueError(
+                "fitness_inertia must be in [0, 1); "
+                f"got {self.config.fitness_inertia}")
+        if self.config.cash_boost_random and self.config.equity_heterogeneity:
+            raise ValueError(
+                "cash_boost_random and equity_heterogeneity both modify init balance sheets; "
+                "stacking them would conflate effects. Enable only one. "
+                "If joint analysis is needed later, design the interaction explicitly.")
+        if self.config.tier_init and (self.config.cash_boost_random or self.config.equity_heterogeneity):
+            raise ValueError(
+                "tier_init is mutually exclusive with cash_boost_random and equity_heterogeneity; "
+                "all three modify init balance sheets. Enable only one.")
         if not self.config.lender_change:
             self.config.lender_change = lc.determine_algorithm()
         self.policy_changes = 0
@@ -1267,7 +1440,72 @@ class Model:
             self.export_description = export_description
         for i in range(self.config.N):
             self.banks.append(Bank(i, self))
+        # Optional: draw initial equities from lognormal so banks start heterogeneous
+        if self.config.equity_heterogeneity:
+            E_mean = self.config.E_i0
+            cv = self.config.equity_cv
+            sigma_ln = float(np.sqrt(np.log(1 + cv ** 2)))
+            mu_ln = float(np.log(E_mean) - sigma_ln ** 2 / 2)
+            cap = self.config.equity_max_factor * E_mean if self.config.equity_max_factor > 0 else float('inf')
+            floor = self.config.equity_min_factor * E_mean if self.config.equity_min_factor > 0 else 0.01
+            for bank in self.banks:
+                e_draw = float(self.rng.lognormal(mu_ln, sigma_ln))
+                bank.E = max(min(e_draw, cap), floor)
+                # restore balance-sheet identity: L + C + R = D + E → C = D + E - L - R
+                bank.C = bank.D + bank.E - bank.L - bank.R
+        # Optional: tier-based init. n_big banks tagged 'big' at E_big, rest 'small'
+        # at E_small such that sum(E) = N*E_i0 is preserved. bank.tier persists through
+        # replace_bank via snapshot/restore around self.__init__() (see Bank.replace_bank).
+        if self.config.tier_init:
+            n_big = self.config.n_big
+            E_big = self.config.E_i0 * self.config.E_big_multiplier
+            E_small = (self.config.N * self.config.E_i0 - n_big * E_big) / (self.config.N - n_big)
+            sigma_big = 0.10 * E_big
+            sigma_small = 0.10 * E_small
+            big_ids = set(int(i) for i in self.rng.choice(self.config.N, size=n_big, replace=False))
+            self.tier_init_ever_big_ids = set(big_ids)  # initialize rotation tracker
+            for bank in self.banks:
+                if bank.id in big_ids:
+                    bank.tier = 'big'
+                    bank.E = max(float(self.rng.normal(E_big, sigma_big)), 0.01)
+                else:
+                    bank.tier = 'small'
+                    bank.E = max(float(self.rng.normal(E_small, sigma_small)), 0.01)
+                # restore balance-sheet identity: L + C + R = D + E → C = D + E - L - R
+                bank.C = bank.D + bank.E - bank.L - bank.R
+        # Optional: random cash-boost heterogeneity (BA-cash without BA-topology).
+        # Mutually exclusive with equity_heterogeneity (guarded above).
+        if self.config.cash_boost_random:
+            self._apply_cash_boost_to_random_subset()
         self.config.lender_change.initialize_bank_relationships(self)
+
+    def _apply_cash_boost_to_random_subset(self):
+        """Boost cash for a random subset of banks (super tier and pref tier).
+        Balance sheet preserving: ΔC = (factor-1)·C; ΔD = ΔC/(1-r̂); R = r̂·D.
+        E uniform across all banks. Tags bank._cash_boost ∈ {'super','pref','default'}."""
+        n_super = self.config.cash_boost_n_super
+        n_pref  = self.config.cash_boost_n_pref
+        indices = np.random.permutation(self.config.N)
+        super_idx = set(indices[:n_super].tolist())
+        pref_idx  = set(indices[n_super:n_super + n_pref].tolist())
+        for bank in self.banks:
+            if bank.id in super_idx:
+                self._boost_bank(bank, self.config.cash_boost_super_factor)
+                bank._cash_boost = 'super'
+            elif bank.id in pref_idx:
+                self._boost_bank(bank, self.config.cash_boost_pref_factor)
+                bank._cash_boost = 'pref'
+            else:
+                bank._cash_boost = 'default'
+
+    def _boost_bank(self, bank, factor):
+        """Apply (factor)× cash boost to a single bank, preserving L+C+R = D+E."""
+        delta_C = bank.C * (factor - 1.0)
+        r_hat = self.config.reserves
+        delta_D = delta_C / (1.0 - r_hat)
+        bank.C += delta_C
+        bank.D += delta_D
+        bank.R = r_hat * bank.D
 
     def forward(self):
         self.initialize_step()
@@ -1294,6 +1532,7 @@ class Model:
         self.statistics.compute_equity()
         self.statistics.compute_liquidity()
         self.statistics.compute_credit_channels_and_best_lender()
+        self.statistics.record_bank_snapshot(self.banks)
         self.statistics.compute_fitness()
         self.statistics.compute_policy()
         self.statistics.compute_deposits_and_reserves()
@@ -1922,6 +2161,121 @@ class Model:
         if self.t == 0:
             self.log.debug_banks()
 
+    def _bilateral_cap(self, lender, borrower):
+        """Eq. 6 bilateral exposure cap L_ij = min([γE_i + p_j(1-b_j)αA_j] / [p_j(1-b_jη)], C_i).
+        Pure function of state at call time — no RNG, no side effects.
+        Reads `borrower.prob_surviving` (set in do_interest_rate_common_part)
+        to match the inline logic exactly when `p_avg_ir` is overridden.
+        Boundary cases match Table 1 of alternativa.tex:
+          p_j <= 0      → unconstrained by default risk → cap at C_i
+          p_j >= 1.0    → insolvent borrower → 0
+          (1 - b_j*η) <= 0 → degenerate denominator → 0
+        """
+        p_j = 1 - borrower.prob_surviving
+        max_A = self.max_A_lagged if self.max_A_lagged > 0 else 1.0
+        b_j = borrower.A_lagged / max_A if self.max_A_lagged > 0 else 0
+        eta = self.config.eta_bailout
+        if p_j <= 0:
+            return lender.C
+        if p_j >= 1.0:
+            return 0.0
+        if (1 - b_j * eta) <= 0:
+            return 0.0
+        gamma = self.config.gamma_capital
+        alpha = self.config.alpha_collateral
+        return min(
+            (gamma * lender.E + p_j * (1 - b_j) * alpha * borrower.A_lagged)
+            / (p_j * (1 - b_j * eta)),
+            lender.C,
+        )
+
+    def _compute_L_max_system(self):
+        """O(N²) max over all alive (lender, borrower) pairs of _bilateral_cap.
+        Used as denominator for fitness_basis='bilateral'. Deterministic
+        (V2 verified). Returns 1.0 floor if no positive caps exist."""
+        L_max = 0.0
+        alive = [b for b in self.banks if not b.failed]
+        for k in alive:
+            for m in alive:
+                if k is m:
+                    continue
+                L_km = self._bilateral_cap(lender=k, borrower=m)
+                if L_km > L_max:
+                    L_max = L_km
+        return L_max if L_max > 0 else 1.0
+
+    def _compute_raw_fitness(self, bank, borrower=None):
+        """Raw (un-smoothed) fitness signal for a bank.
+
+        equity:    Φ_i = E_i / E_max                            (borrower ignored)
+        loan_book: Φ_i = L_i / L_max                            (borrower ignored)
+        bilateral: Φ_i^j = L_ij / L_max_system  if borrower given, else
+                   mean over bank's current borrowers (statistics use)
+                   ('current borrower' = any alive bank b with b.lender == bank.id)
+        """
+        basis = self.config.fitness_basis
+        if basis == "equity":
+            return bank.E / self.maxE if self.maxE > 0 else 0.0
+        if basis == "loan_book":
+            L_max = getattr(self, 'L_max', 1.0)
+            return bank.L / L_max if L_max > 0 else 0.0
+        if basis == "bilateral":
+            L_max_sys = getattr(self, 'L_max_system', 1.0)
+            if L_max_sys <= 0:
+                L_max_sys = 1.0
+            if borrower is not None:
+                return self._bilateral_cap(lender=bank, borrower=borrower) / L_max_sys
+            # Statistics path: mean over current borrowers (banks that selected
+            # `bank` as their lender this period). 0 if none.
+            current = [b for b in self.banks
+                       if (not b.failed) and b is not bank
+                       and getattr(b, 'lender', None) == bank.id]
+            if not current:
+                return 0.0
+            caps = [self._bilateral_cap(lender=bank, borrower=b) for b in current]
+            return (sum(caps) / len(caps)) / L_max_sys
+        raise ValueError(f"Unknown fitness_basis: {basis}")
+
+    def _update_canonical_fitness(self, bank):
+        """Set bank.mu (the canonical fitness used for statistics and for
+        non-bilateral specs in Boltzmann switching). Applies AR(1) inertia
+        if config.fitness_inertia > 0. Called once per period in
+        do_interest_rate, replacing the previous `bank.mu = bank.E / maxE`."""
+        raw = self._compute_raw_fitness(bank, borrower=None)
+        lam = self.config.fitness_inertia
+        if lam == 0.0 or bank.prev_smoothed_fitness is None:
+            smoothed = raw
+        else:
+            smoothed = (1 - lam) * raw + lam * bank.prev_smoothed_fitness
+        bank.prev_smoothed_fitness = smoothed
+        bank.mu = smoothed
+        return smoothed
+
+    def get_fitness_for_switching(self, lender, borrower):
+        """Called by the Boltzmann mechanism (interbank_lenderchange.py) to
+        evaluate a (lender, borrower) pair. For 'equity' and 'loan_book',
+        returns lender.mu directly (already smoothed by _update_canonical_fitness).
+        For 'bilateral', computes the borrower's perception of this lender
+        and applies per-(lender, borrower) inertia stored on the borrower."""
+        basis = self.config.fitness_basis
+        if basis in ("equity", "loan_book"):
+            return lender.mu
+        # bilateral: borrower-specific evaluation with per-pair inertia
+        L_max_sys = getattr(self, 'L_max_system', 1.0)
+        if L_max_sys <= 0:
+            L_max_sys = 1.0
+        raw = self._bilateral_cap(lender=lender, borrower=borrower) / L_max_sys
+        lam = self.config.fitness_inertia
+        if lam == 0.0:
+            return raw
+        prev = borrower.prev_smoothed_bilateral.get(lender.id, None)
+        if prev is None:
+            smoothed = raw
+        else:
+            smoothed = (1 - lam) * raw + lam * prev
+        borrower.prev_smoothed_bilateral[lender.id] = smoothed
+        return smoothed
+
     def do_interest_rate_common_part(self):
         if len(self.banks) <= 1:
             return None
@@ -1935,6 +2289,15 @@ class Model:
             bank.A = bank.C + bank.L + bank.R
         # eq. 3: max lagged assets for bailout probability
         self.max_A_lagged = max((b.A_lagged for b in self.banks if not b.failed), default=1.0)
+        # Per-period normalizers for non-equity fitness specs (Phase 1).
+        # Only populated when needed; default 'equity' path does not use these.
+        basis = self.config.fitness_basis
+        if basis == "loan_book":
+            self.L_max = max((b.L for b in self.banks if not b.failed), default=1.0)
+            if self.L_max <= 0:
+                self.L_max = 1.0
+        elif basis == "bilateral":
+            self.L_max_system = self._compute_L_max_system()
 
     def do_interest_rate(self):
         self.do_interest_rate_common_part()
@@ -1962,26 +2325,23 @@ class Model:
                 # BT 2017 bilateral screening cost
                 screening_cost = self.config.chi * A_i - self.config.phi * A_j
 
-                # Boundary cases (Table 1 of alternativa.tex)
+                # eq. 6: optimal loan supply (extracted to _bilateral_cap so
+                # the bilateral fitness path can reuse the same formula).
+                # Boundary cases (Table 1 of alternativa.tex) handled inside.
+                L_ij = self._bilateral_cap(lender=bank_i, borrower=bank_j)
+
+                # rij computation by case (boundary structure preserved)
                 if p_j <= 0:  # perfectly capitalized borrower
-                    L_ij = bank_i.C
                     rij = screening_cost / L_ij if L_ij > 0 else np.inf
 
                 elif p_j >= 1.0:  # insolvent, priced out
-                    L_ij = 0
                     rij = np.inf
 
                 elif (1 - b_j * eta) <= 0:  # degenerate bailout
-                    L_ij = 0
                     rij = np.inf
 
                 else:
-                    # eq. 6: optimal loan supply, IRB capital constraint binding
-                    L_ij = min(
-                        (gamma * E_i + p_j * (1 - b_j) * alpha * A_j)
-                        / (p_j * (1 - b_j * eta)),
-                        bank_i.C
-                    )
+                    # eq. 6 cap already computed above
 
                     if L_ij <= 0:
                         rij = np.inf
@@ -2012,9 +2372,12 @@ class Model:
             bank_i.asset_i_avg_ir = bank_i.asset_i_avg_ir / (self.config.N - 1)
             bank_i.asset_j_avg_ir = bank_i.asset_j_avg_ir / (self.config.N - 1)
 
-        # eq. 9: equity-only fitness (replaces compound fitness)
+        # eq. 9: fitness signal. Dispatch via _update_canonical_fitness which
+        # handles fitness_basis (equity/loan_book/bilateral) and applies AR(1)
+        # inertia if fitness_inertia > 0. With defaults (equity, λ=0) this is
+        # byte-identical to `bank.mu = bank.E / self.maxE`.
         for bank in self.banks:
-            bank.mu = bank.E / self.maxE if self.maxE > 0 else 0
+            self._update_canonical_fitness(bank)
 
     def setup_links(self):
         self.config.lender_change.step_setup_links(self)
@@ -2123,10 +2486,92 @@ class Bank:
         # so propagate_lender_failures() knows who was borrowing from whom.
         self._snapshot_loan = 0.0
         self._snapshot_lender_id = None
+        # Fitness-inertia state (Phase 1). Reset on every __init__ call so that
+        # fresh banks AND replacement entrants start clean. The bilateral dict
+        # stores per-(this borrower, candidate lender id) smoothed perceptions.
+        self.prev_smoothed_fitness = None
+        self.prev_smoothed_bilateral = {}
 
     def replace_bank(self):
+        # Purge stale bilateral-fitness inertia keyed on this bank's id from
+        # all surviving borrowers BEFORE chartering the replacement at the
+        # same id. Without this, the AR(1) blend in get_fitness_for_switching
+        # would carry the dead bank's accumulated relationship value into the
+        # new entrant's smoothed signal — a silent economic error. (V1 finding
+        # 3: ids are recycled and existing replacement code does not purge
+        # references on surviving banks.)
+        dead_id = self.id
+        for b in self.model.banks:
+            if b is self or b.failed:
+                continue
+            if hasattr(b, 'prev_smoothed_bilateral'):
+                b.prev_smoothed_bilateral.pop(dead_id, None)
         self.failures += 1
+        # Tier-init: snapshot tier before __init__ erases it. Defensive against future
+        # edits to Bank.__init__ that might reset self.tier.
+        saved_tier = getattr(self, 'tier', None) if self.model.config.tier_init else None
         self.__init__()
+        # Tier-init: empty-slot-fill rotation. Failed big bank ALWAYS comes back small
+        # (slot opens for rotation). Failed small bank fills empty slot if count_big < K
+        # (rotation event); else stays small. This avoids the static-ID / persistent-tag
+        # lock-in pathology while maintaining K=n_big tier composition.
+        if self.model.config.tier_init:
+            n_big = self.model.config.n_big
+            E_big_v = self.model.config.E_i0 * self.model.config.E_big_multiplier
+            E_small_v = (self.model.config.N * self.model.config.E_i0 - n_big * E_big_v) / (self.model.config.N - n_big)
+            count_big_alive = sum(1 for b in self.model.banks
+                                  if b is not self and not b.failed and getattr(b, 'tier', '') == 'big')
+            if saved_tier == 'big':
+                self.model.big_bank_death_count += 1
+                # Failed big bank: comes back small (slot opens for rotation)
+                self.tier = 'small'
+                self.E = max(float(self.model.rng.normal(E_small_v, 0.10 * E_small_v)), 0.01)
+            elif count_big_alive < n_big:
+                # Failed small bank, but a big slot is empty — fill it (rotation event)
+                self.tier = 'big'
+                self.E = max(float(self.model.rng.normal(E_big_v, 0.10 * E_big_v)), 0.01)
+                self.model.tier_init_ever_big_ids.add(self.id)
+            else:
+                # Failed small bank, count at K — stay small
+                self.tier = 'small'
+                self.E = max(float(self.model.rng.normal(E_small_v, 0.10 * E_small_v)), 0.01)
+            self.C = self.D + self.E - self.L - self.R
+        # If heterogeneous equity is on, draw replacement equity from lognormal
+        # centred on the current median (self.E after __init__) so variance
+        # persists throughout the run, not just at t=0.
+        if self.model.config.equity_heterogeneity and self.E > 0:
+            cv = self.model.config.equity_cv
+            sigma_ln = float(np.sqrt(np.log(1 + cv ** 2)))
+            mu_ln = float(np.log(self.E) - sigma_ln ** 2 / 2)
+            E_mean = self.model.config.E_i0
+            cap = self.model.config.equity_max_factor * E_mean if self.model.config.equity_max_factor > 0 else float('inf')
+            floor = self.model.config.equity_min_factor * E_mean if self.model.config.equity_min_factor > 0 else 0.01
+            e_draw = float(self.model.rng.lognormal(mu_ln, sigma_ln))
+            self.E = max(min(e_draw, cap), floor)
+            self.C = self.D + self.E - self.L - self.R
+        # If random cash-boost is on, assign tier to maintain EXACT cap of
+        # n_super + n_pref boosted banks. The replacement bank is promoted to
+        # super (or pref) only if the system currently has fewer than the
+        # target count — otherwise it stays default. This prevents the upward
+        # population drift that pure probabilistic re-draw causes (boosted
+        # banks have more cash → fewer shock deaths → accumulate over time).
+        # IDs still rotate freely because *which* bank fills an empty slot
+        # depends on which bank happens to die.
+        if self.model.config.cash_boost_random:
+            alive_others = [b for b in self.model.banks
+                            if b is not self and not b.failed]
+            super_count = sum(1 for b in alive_others
+                              if getattr(b, '_cash_boost', '') == 'super')
+            pref_count = sum(1 for b in alive_others
+                             if getattr(b, '_cash_boost', '') == 'pref')
+            if super_count < self.model.config.cash_boost_n_super:
+                self.model._boost_bank(self, self.model.config.cash_boost_super_factor)
+                self._cash_boost = 'super'
+            elif pref_count < self.model.config.cash_boost_n_pref:
+                self.model._boost_bank(self, self.model.config.cash_boost_pref_factor)
+                self._cash_boost = 'pref'
+            else:
+                self._cash_boost = 'default'
 
     def do_bankruptcy(self, phase):
         # Guard: prevent re-entry if bank already processed in this cascade

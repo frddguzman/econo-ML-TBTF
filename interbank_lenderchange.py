@@ -66,6 +66,8 @@ def determine_algorithm(given_name = "default", p:float = None, m:int = None):
                               isinstance(lender_change_resultant, RestrictedMarket) or
                               isinstance(lender_change_resultant, ShockedMarket3)):
             lender_change_resultant.set_parameter('p', p)
+        if not p is None and isinstance(lender_change_resultant, BoltzmannLoyalty):
+            lender_change_resultant.set_parameter('loyalty', p)
         if not m is None and (isinstance(lender_change_resultant, Preferential) or
                               isinstance(lender_change_resultant, InitialStability)):
             lender_change_resultant.set_parameter('m', m)
@@ -420,11 +422,13 @@ class Boltzmann(LenderChange):
         if possible_lender is None:
             possible_lender_mu = 0
         else:
-            possible_lender_mu = this_model.banks[possible_lender].mu
+            possible_lender_mu = this_model.get_fitness_for_switching(
+                this_model.banks[possible_lender], bank)
         if bank.get_lender() is None:
             current_lender_mu = 0
         else:
-            current_lender_mu = bank.get_lender().mu
+            current_lender_mu = this_model.get_fitness_for_switching(
+                bank.get_lender(), bank)
 
         # we can now break old links and set up new lenders, using probability P
         # (equation 8)
@@ -483,6 +487,74 @@ class Boltzmann(LenderChange):
 
     def describe(self):
         return f"($\\gamma={self.gamma} and change if >{self.CHANGE_LENDER_IF_HIGHER})$"
+
+
+class BoltzmannLoyalty(Boltzmann):
+    """Boltzmann switching with a loyalty/switching-cost term λ. The candidate
+    lender's perceived fitness is shifted down by `loyalty`, so borrowers only
+    switch when the candidate is meaningfully fitter than the current lender.
+    λ=0 reproduces the base Boltzmann behaviour exactly.
+    """
+    loyalty: float = 0.0
+
+    def __str__(self):
+        return f"lc=BoltzMannLoyalty(lambda={self.loyalty:.2f})"
+
+    def check_parameter(self, name, value):
+        if name == 'loyalty':
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                return False
+            return 0 <= v <= 1
+        return False
+
+    def set_parameter(self, name, value):
+        if name == 'loyalty':
+            if value is not None:
+                if self.check_parameter(name, value):
+                    self.loyalty = float(value)
+                    self.parameter[name] = float(value)
+                else:
+                    print(f"error with parameter '{name}' for {self.__class__.__name__}")
+                    sys.exit(-1)
+        else:
+            super().set_parameter(name, value)
+
+    def change_lender(self, this_model, bank, t):
+        possible_lender = self.new_lender(this_model, bank)
+        if possible_lender is None:
+            possible_lender_mu = 0
+        else:
+            possible_lender_mu = this_model.get_fitness_for_switching(
+                this_model.banks[possible_lender], bank)
+        if bank.get_lender() is None:
+            current_lender_mu = 0
+        else:
+            current_lender_mu = this_model.get_fitness_for_switching(
+                bank.get_lender(), bank)
+
+        # Loyalty subtracts from the candidate's perceived fitness — switching cost
+        gap = possible_lender_mu - current_lender_mu - self.loyalty
+        exponent = -this_model.config.beta * gap
+        exponent = max(-500, min(500, exponent))
+        boltzmann = 1 / (1 + math.exp(exponent))
+
+        if t < 20:
+            bank.P = boltzmann
+        else:
+            bank.P_yesterday = bank.P
+            bank.P = self.gamma * bank.P_yesterday + (1 - self.gamma) * boltzmann
+
+        if bank.P >= self.CHANGE_LENDER_IF_HIGHER:
+            text_to_return = f"{bank.get_id()} new lender is #{possible_lender} from #{bank.lender} with %{bank.P:.3f}"
+            bank.lender = possible_lender
+        else:
+            text_to_return = f"{bank.get_id()} maintains lender #{bank.lender} with %{1 - bank.P:.3f}"
+        return text_to_return
+
+    def describe(self):
+        return f"($\\lambda={self.loyalty}, \\gamma={self.gamma}, change if >{self.CHANGE_LENDER_IF_HIGHER})$"
 
 
 class InitialStability(Boltzmann):

@@ -13,12 +13,19 @@ import os
 import base64
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 import numpy as np
 from flask import Flask, render_template, request, jsonify
 import interbank
 import interbank_lenderchange as lc
 
-SAVE_DIR = r'C:\Users\frddg\Documents\UJI\TFG\econo-ml-TBTF\Simulations'
+# Output directory for sweep result CSVs. Override via TBTF_SIM_DIR env var.
+# Default: a sibling `Simulations/` folder next to the repo root.
+SAVE_DIR = os.environ.get(
+    'TBTF_SIM_DIR',
+    str(Path(__file__).resolve().parent.parent / 'Simulations'),
+)
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 app = Flask(__name__)
 

@@ -35,7 +35,7 @@ SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Simul
 
 # ── Valid lender-change algorithms ──
 VALID_ALGORITHMS = [
-    'Boltzmann', 'InitialStability', 'Preferential',
+    'Boltzmann', 'BoltzmannLoyalty', 'InitialStability', 'Preferential',
     'RestrictedMarket', 'ShockedMarket', 'ShockedMarket2',
     'ShockedMarket3', 'SmallWorld',
 ]
@@ -49,7 +49,7 @@ SWEEP_PARAMS = {
     'fund_levy_rate':    {'label': '\u03c4  Fund levy rate',           'default': 0.0001, 'min': 0,  'max': 0.01, 'step': 0.0001},
     'beta':              {'label': '\u03b2  Boltzmann intensity',      'default': 5,    'min': 0,    'max': 20,   'step': 1},
     'mu':                {'label': '\u03bc  Shock mean',               'default': 0.7,  'min': 0.1,  'max': 1.0,  'step': 0.05},
-    'omega':             {'label': '\u03c9  Shock dispersion',         'default': 0.5,  'min': 0.1,  'max': 1.0,  'step': 0.05},
+    'omega':             {'label': '\u03c9  Shock dispersion',         'default': 0.6,  'min': 0.1,  'max': 1.0,  'step': 0.05},
     'alfa':              {'label': '\u03b1_BT Bankruptcy threshold',   'default': 0.1,  'min': 0.01, 'max': 1.0,  'step': 0.01},
     'N':                 {'label': 'N  Number of banks',               'default': 50,   'min': 5,    'max': 200,  'step': 5},
 }
@@ -98,6 +98,15 @@ STAT_NAMES = [
     'leverage', 'profits',
     'bailout_bill', 'bailout_count', 'tax_induced_failures',
     'resolution_fund_balance', 'fund_depleted_events', 'total_levy_collected',
+    # signal decomposition additions
+    'fitness', 'best_lender_clients', 'num_banks',
+    'active_borrowers', 'active_lenders', 'equity_lenders',
+    'prob_bankruptcy', 'deposits', 'reserves', 'num_loans',
+    'systemic_leverage', 'cascade_failures', 'bailout_tax_total',
+    'bankruptcy_rationed',
+    # hub tracking (exact step function — Brini Fig. 6)
+    'best_lender', 'best_lender_fitness', 'best_lender_equity',
+    'best_lender_generation',
 ]
 
 
@@ -132,6 +141,83 @@ def extract_metric(stats, name, T):
     return v if math.isfinite(v) else 0.0
 
 
+def compute_hub_tenure_stats(best_lender, best_lender_generation, T):
+    """Run-length encode the composite (id, generation) key to recover true
+    hub-tenure plateaus. A new run begins whenever EITHER the id changes
+    OR the generation counter ticks (same id but post-replacement = different bank).
+    Also returns the naive raw-id encoding for contrast — the gap between
+    the two numbers is the size of the recycled-id artefact.
+
+    Returns dict with keys:
+      avg_tenure_true, max_tenure_true, n_runs_true,
+      avg_tenure_naive, max_tenure_naive, n_runs_naive,
+      runs_true (list of [id, gen, start_t, end_t, length]),
+      false_plateau_marks (list of t where id stayed but gen ticked).
+    """
+    out = {
+        'avg_tenure_true': 0.0, 'max_tenure_true': 0, 'n_runs_true': 0,
+        'avg_tenure_naive': 0.0, 'max_tenure_naive': 0, 'n_runs_naive': 0,
+        'runs_true': [], 'false_plateau_marks': [],
+    }
+    if best_lender is None or T <= 0:
+        return out
+
+    bl = list(best_lender[:T])
+    bg = list(best_lender_generation[:T]) if best_lender_generation is not None else [-1] * T
+
+    # Skip leading sentinel periods where no hub was identified (id == -1)
+    valid_starts = [i for i, v in enumerate(bl) if v >= 0]
+    if not valid_starts:
+        return out
+
+    def encode(keys):
+        runs = []
+        cur = keys[0]
+        start = 0
+        for i in range(1, len(keys)):
+            if keys[i] != cur:
+                runs.append((cur, start, i - 1, i - start))
+                cur = keys[i]
+                start = i
+        runs.append((cur, start, len(keys) - 1, len(keys) - start))
+        return runs
+
+    # Naive: identity keyed only by id (the bug — recycled ids look continuous)
+    naive_keys = [v for v in bl if v >= 0]
+    naive_runs = encode(naive_keys) if naive_keys else []
+
+    # True: identity keyed by (id, generation)
+    true_keys = [(b, g) for b, g in zip(bl, bg) if b >= 0]
+    true_runs = encode(true_keys) if true_keys else []
+
+    # False plateau marks: timestamps where id stayed the same but gen ticked
+    last_b, last_g = None, None
+    for t_idx, (b, g) in enumerate(zip(bl, bg)):
+        if b < 0:
+            last_b, last_g = None, None
+            continue
+        if last_b is not None and b == last_b and g != last_g:
+            out['false_plateau_marks'].append(t_idx)
+        last_b, last_g = b, g
+
+    if true_runs:
+        true_lengths = [r[3] for r in true_runs]
+        out['avg_tenure_true'] = float(np.mean(true_lengths))
+        out['max_tenure_true'] = int(max(true_lengths))
+        out['n_runs_true'] = len(true_runs)
+        out['runs_true'] = [
+            [int(k[0]), int(k[1]), int(s), int(e), int(L)]
+            for (k, s, e, L) in true_runs
+        ]
+    if naive_runs:
+        naive_lengths = [r[3] for r in naive_runs]
+        out['avg_tenure_naive'] = float(np.mean(naive_lengths))
+        out['max_tenure_naive'] = int(max(naive_lengths))
+        out['n_runs_naive'] = len(naive_runs)
+
+    return out
+
+
 def _build_config(params):
     """Build config dict from request parameters."""
     config_params = {}
@@ -147,10 +233,16 @@ def _build_config(params):
         'gamma_capital', 'eta_bailout', 'alpha_collateral',
         'phi', 'chi',
         'fund_levy_rate', 'fund_initial_balance',
+        'equity_cv',
     ]
     for k in float_keys:
         if k in params:
             config_params[k] = float(params[k])
+
+    # Bool params
+    if 'equity_heterogeneity' in params:
+        v = params['equity_heterogeneity']
+        config_params['equity_heterogeneity'] = v in (True, 'true', '1', 'on')
 
     # String params
     if 'fiscal_regime' in params:
@@ -410,6 +502,18 @@ def api_simulate():
 
         # Bank snapshot at final period
         result['banks'] = collect_bank_snapshot(model)
+
+        # Per-bank time-series rows (all active banks, every period)
+        result['bank_detail'] = getattr(model.statistics, '_bank_rows', [])
+
+        # Hub tenure stats: composite (id, generation) key vs naive id-only,
+        # so the recycled-id artefact is visible (and not silently smoothed
+        # away by normalising the hub-id line à la Brini Fig. 6).
+        result['hub_tenure'] = compute_hub_tenure_stats(
+            getattr(model.statistics, 'best_lender', None),
+            getattr(model.statistics, 'best_lender_generation', None),
+            t,
+        )
 
         return jsonify(result)
 
